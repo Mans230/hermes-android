@@ -1,0 +1,7 @@
+# Replace the domain. This is an example, not an installer.
+# Keep the Hermes API bound to loopback. Do not expose port 8642 publicly.
+hermes.example.com {
+    reverse_proxy 127.0.0.1:8642 {
+        flush_interval -1
+    }
+}
