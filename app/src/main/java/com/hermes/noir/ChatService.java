@@ -70,11 +70,12 @@ public final class ChatService extends Service {
                             progress="Retrying with fallback model…";revision++;
                             result=HermesApi.stream(requestBot,current.getJSONArray("messages"),Conversations.group(current),activeThread,streamListener);
                         }
+                        final JSONObject completed=result;
                         store.edit(d->{
                             JSONObject target=Store.find(d.getJSONArray("threads"),activeThread);
                             JSONObject reply=Conversations.reply(target.getJSONArray("messages"),id);
-                            reply.put("content",result.getString("content")).put("status","done")
-                                .put("model",result.optString("model")).put("usage",result.getJSONObject("usage")).put("tools",tools);
+                            reply.put("content",completed.getString("content")).put("status","done")
+                                .put("model",completed.optString("model")).put("usage",completed.getJSONObject("usage")).put("tools",tools);
                             target.put("updated",System.currentTimeMillis());
                         });
                     }catch(Exception e){
