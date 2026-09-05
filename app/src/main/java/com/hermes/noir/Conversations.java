@@ -20,9 +20,16 @@ public final class Conversations {
         return MentionRouter.recipients(message,lookup);
     }
     public static JSONObject pending(JSONObject bot,String turn)throws Exception {
-        return new JSONObject().put("id",Store.id()).put("turn",turn).put("role","assistant")
+        return pending(bot,turn,null,null,null);
+    }
+    public static JSONObject pending(JSONObject bot,String turn,String model,String provider,String effort)throws Exception {
+        JSONObject row=new JSONObject().put("id",Store.id()).put("turn",turn).put("role","assistant")
             .put("botId",bot.getString("id")).put("botName",bot.getString("name"))
             .put("avatar",bot.optString("avatar","🤖")).put("photo",bot.optString("photo")).put("content", "").put("status","queued");
+        if(model!=null&&!model.trim().isEmpty())row.put("modelOverride",model.trim());
+        if(provider!=null&&!provider.trim().isEmpty())row.put("providerOverride",provider.trim());
+        if(effort!=null&&!effort.trim().isEmpty())row.put("effortOverride",effort.trim());
+        return row;
     }
     public static JSONObject reply(JSONArray messages,String id)throws Exception {return Store.find(messages,id);}
 }

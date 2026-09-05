@@ -127,7 +127,11 @@ public final class MainActivity extends Activity {
             LinearLayout words=column();words.setPadding(dp(12),0,dp(8),0);
             TextView title=label(group?t.getString("title"):b.getString("name"),16,WHITE);title.setTypeface(null,Typeface.BOLD);title.setMaxLines(1);title.setEllipsize(TextUtils.TruncateAt.END);words.addView(title);gap(words,4);
             JSONArray messages=t==null?new JSONArray():t.getJSONArray("messages");String preview=messages.length()==0?(group?tr("جروب جديد","New group"):b.optString("description",tr("لا توجد رسائل بعد","No messages yet"))):plain(messages.getJSONObject(messages.length()-1).opt("content"));
-            TextView subtitle=label(preview.isEmpty()?tr("لا توجد رسائل بعد","No messages yet"):preview,13,MUTED);subtitle.setMaxLines(1);subtitle.setEllipsize(TextUtils.TruncateAt.END);words.addView(subtitle);line.addView(words,new LinearLayout.LayoutParams(0,-2,1));
+            String state=b==null?"":b.optString("connectionStatus","");
+            String stateLabel=state.equals("online")?tr("متصل","Online"):state.equals("offline")?tr("غير متصل","Offline"):"";
+            String shown=preview.isEmpty()?tr("لا توجد رسائل بعد","No messages yet"):preview;
+            if(!stateLabel.isEmpty())shown += "  ·  " + stateLabel;
+            TextView subtitle=label(shown,13,state.equals("offline")?0xffed7171:MUTED);subtitle.setMaxLines(1);subtitle.setEllipsize(TextUtils.TruncateAt.END);words.addView(subtitle);line.addView(words,new LinearLayout.LayoutParams(0,-2,1));
             if(t!=null){
                 LinearLayout meta=column();meta.setGravity(Gravity.END);meta.addView(label(DateFormat.getTimeInstance(DateFormat.SHORT).format(new Date(t.optLong("updated"))),10,MUTED));
                 if(t.optLong("updated")>t.optLong("readAt")&&messages.length()>0&&messages.getJSONObject(messages.length()-1).optString("role").equals("assistant")){gap(meta,6);meta.addView(label("●",10,WHITE));}line.addView(meta);
@@ -184,8 +188,27 @@ public final class MainActivity extends Activity {
             if(Build.VERSION.SDK_INT>=33&&checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED)requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS},9);
             else startActivity(new Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(android.provider.Settings.EXTRA_APP_PACKAGE,getPackageName()));
         }));gap(body,24);
-        body.addView(label(tr("الضغط المطوّل على البوت يفتح إعداداته.\n\nالمحادثات والمفاتيح مشفّرة على الجهاز. سجل Telegram مستقل. الإشعارات للردود التي تبدأها هنا فقط.\n\nإعداد الشخصية يخص محادثات التطبيق؛ لا يغيّر SOUL.md على السيرفر.","Long-press a bot to edit its identity and connection.\n\nChats and keys are encrypted on this device. Telegram history is separate. Notifications cover replies started here.\n\nPersonality applies to app requests; it does not modify server SOUL.md."),14,MUTED));gap(body,32);body.addView(label("Hermes · Android client 0.2.0",12,MUTED));
+        body.addView(button(tr("تصدير إعدادات البوتات","Export bot settings"),false,()->exportBotSettings()));gap(body,14);
+        body.addView(button(tr("استيراد إعدادات البوتات","Import bot settings"),false,()->importBotSettings()));gap(body,24);
+        body.addView(label(tr("الضغط المطوّل على البوت يفتح إعداداته.\n\nالمحادثات والمفاتيح مشفّرة على الجهاز. سجل Telegram مستقل. الإشعارات للردود التي تبدأها هنا فقط.\n\nإعداد الشخصية يخص محادثات التطبيق؛ لا يغيّر SOUL.md على السيرفر.","Long-press a bot to edit its identity and connection.\n\nChats and keys are encrypted on this device. Telegram history is separate. Notifications cover replies started here.\n\nPersonality applies to app requests; it does not modify server SOUL.md."),14,MUTED));gap(body,32);body.addView(label("Hermes · Android client 0.3.0",12,MUTED));
     }
+    private void exportBotSettings(){
+        act(()->{JSONObject out=new JSONObject().put("format","hermes-android-bots-v1").put("bots",store.read().getJSONArray("bots"));
+            exportText=out.toString(2);startActivityForResult(new Intent(Intent.ACTION_CREATE_DOCUMENT).setType("application/json").addCategory(Intent.CATEGORY_OPENABLE).putExtra(Intent.EXTRA_TITLE,"hermes-bots.json"),44);});
+    }
+    private void importBotSettings(){startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT).setType("application/json").addCategory(Intent.CATEGORY_OPENABLE),45);}
+    private void importBotSettings(Uri uri){new Thread(()->{try{
+        byte[] bytes;try(InputStream in=getContentResolver().openInputStream(uri);ByteArrayOutputStream out=new ByteArrayOutputStream()){
+            if(in==null)throw new IOException("Cannot read settings file");byte[] buf=new byte[8192];int n;while((n=in.read(buf))!=-1){out.write(buf,0,n);if(out.size()>2*1024*1024)throw new Exception("Settings file is too large");}bytes=out.toByteArray();
+        }
+        JSONObject imported=new JSONObject(new String(bytes,StandardCharsets.UTF_8));JSONArray incoming=imported.getJSONArray("bots");
+        store.edit(d->{JSONArray bots=d.getJSONArray("bots");for(int i=0;i<incoming.length();i++){JSONObject b=new JSONObject(incoming.getJSONObject(i).toString());
+            if(!b.has("id"))b.put("id",Store.id());b.put("url",Endpoint.normalize(b.optString("url")));if(b.optString("key").isEmpty())throw new Exception("A bot is missing its API key");
+            String handle=b.optString("handle");if(!handle.isEmpty())b.put("handle",MentionRouter.handle(handle));
+            boolean replaced=false;for(int j=0;j<bots.length();j++)if(bots.getJSONObject(j).getString("id").equals(b.getString("id"))){bots.put(j,b);replaced=true;break;}if(!replaced)bots.put(b);
+        }});
+        runOnUiThread(()->act(()->{show();Toast.makeText(this,tr("تم استيراد الإعدادات","Bot settings imported"),Toast.LENGTH_SHORT).show();}));
+    }catch(Exception e){runOnUiThread(()->{if(!isDestroyed())alert(tr("فشل الاستيراد","Import failed"),e.getMessage());});}}).start();}
     private void editServer()throws Exception {
         JSONObject current=store.read().optJSONObject("server");LinearLayout form=column();form.setPadding(dp(22),dp(16),dp(22),dp(16));
         EditText name=field(form,tr("اسم السيرفر","Server name"),store.read().optString("serverName","birella"),false);
@@ -199,6 +222,7 @@ public final class MainActivity extends Activity {
     }
     private void testConnection(JSONObject bot,View button){
         button.setEnabled(false);new Thread(()->{String error=null;try{HermesApi.check(bot);}catch(Exception e){error=e.getMessage();}final String result=error;
+            try { final String id=bot.optString("id"); if(!id.isEmpty()) store.edit(d->Store.find(d.getJSONArray("bots"),id).put("connectionStatus",result==null?"online":"offline")); } catch(Exception ignored){}
             runOnUiThread(()->{if(isDestroyed())return;button.setEnabled(true);alert(result==null?tr("الاتصال نجح","Connected"):tr("الاتصال لم ينجح","Connection failed"),result==null?tr("Hermes API رد بنجاح.","Hermes API responded successfully."):result);});}).start();
     }
 
@@ -246,6 +270,8 @@ public final class MainActivity extends Activity {
             }
             boolean active=pending&&currentThread.equals(ChatService.threadId)&&m.optString("id").equals(ChatService.replyId);
             String value=active?ChatService.text:plain(m.opt("content"));
+            String modelTag=m.optString("model",m.optString("modelOverride", ""));
+            if(!user&&!modelTag.isEmpty()){TextView tag=label("·  "+modelTag,10,MUTED);tag.setPadding(0,0,0,dp(5));outer.addView(tag);}
             if(!value.isEmpty()){
                 TextView content=label("",16,user?BG:WHITE);content.setLineSpacing(dp(3),1);content.setTextIsSelectable(true);content.setTextDirection(View.TEXT_DIRECTION_FIRST_STRONG);content.setText(markdown(value));
                 LinearLayout.LayoutParams cp=new LinearLayout.LayoutParams(user?-2:-1,-2);cp.gravity=Gravity.END;
@@ -301,8 +327,28 @@ public final class MainActivity extends Activity {
         if(retryBot==null){draft="";attached="";composer.setText("");updateAttachment();}renderMessages();
     }
 
+    private void switchModel()throws Exception {
+        JSONObject t=thread();if(Conversations.group(t))throw new Exception(tr("تغيير الموديل متاح للمحادثات الفردية فقط.","Model switching is available for direct chats only."));
+        JSONObject b=bot(t.getString("botId"));LinearLayout form=column();form.setPadding(dp(22),dp(12),dp(22),dp(12));
+        EditText model=field(form,"MODEL",b.optString("model","hermes-agent"),false);EditText provider=field(form,"PROVIDER",b.optString("provider",""),false);EditText effort=field(form,"REASONING EFFORT",b.optString("effort",""),false);
+        AlertDialog d=new AlertDialog.Builder(this).setTitle(tr("تغيير الموديل للمحادثة القادمة","Switch model for next reply")).setView(form).setNegativeButton(tr("رجوع","Cancel"),null).setPositiveButton(tr("حفظ","Save"),null).create();
+        d.setOnShowListener(v->d.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(w->act(()->{String m=model.getText().toString().trim();if(m.isEmpty())throw new Exception("Enter a model");store.edit(x->Store.find(x.getJSONArray("bots"),b.getString("id")).put("model",m).put("provider",provider.getText().toString().trim()).put("effort",effort.getText().toString().trim()));d.dismiss();show();}));d.show();
+    }
+    private void compareModels()throws Exception {
+        JSONObject t=thread();if(Conversations.group(t))throw new Exception(tr("المقارنة متاحة للمحادثات الفردية فقط.","Comparison is available for direct chats only."));
+        String message=composer==null?"":composer.getText().toString().trim();if(message.isEmpty())throw new Exception(tr("اكتب رسالة للمقارنة أولًا.","Enter a message to compare first."));
+        LinearLayout form=column();form.setPadding(dp(22),dp(12),dp(22),dp(12));EditText one=field(form,"MODEL A",bot(t.getString("botId")).optString("model","hermes-agent"),false);EditText two=field(form,"MODEL B","",false);
+        AlertDialog d=new AlertDialog.Builder(this).setTitle(tr("مقارنة موديلين","Compare two models")).setView(form).setNegativeButton(tr("رجوع","Cancel"),null).setPositiveButton(tr("تشغيل المقارنة","Compare"),null).create();
+        d.setOnShowListener(v->d.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(w->act(()->{String a=one.getText().toString().trim(),b=two.getText().toString().trim();if(a.isEmpty()||b.isEmpty()||a.equals(b))throw new Exception("Enter two different models");sendComparison(message,a,b);d.dismiss();}));d.show();
+    }
+    private void sendComparison(String message,String modelA,String modelB)throws Exception {
+        if(ChatService.isActive())return;JSONObject t=thread();JSONObject bot=bot(t.getString("botId"));final String id=currentThread,turn=Store.id();if(!ChatService.reserve())return;
+        try{store.edit(d->{JSONObject target=Store.find(d.getJSONArray("threads"),id);target.getJSONArray("messages").put(new JSONObject().put("id",Store.id()).put("turn",turn).put("role","user").put("content",message).put("status","done"));target.getJSONArray("messages").put(Conversations.pending(bot,turn,modelA,bot.optString("provider"),bot.optString("effort")).put("comparison",true));target.getJSONArray("messages").put(Conversations.pending(bot,turn,modelB,bot.optString("provider"),bot.optString("effort")).put("comparison",true));target.put("updated",System.currentTimeMillis());});}
+        catch(Exception e){ChatService.releaseReservation();throw e;}
+        startForegroundService(new Intent(this,ChatService.class).putExtra("thread",id).putExtra("turn",turn));composer.setText("");draft="";renderMessages();
+    }
     private void chatMenu()throws Exception {
-        String[] items={tr("تغيير الاسم","Rename"),tr("نسخة من المحادثة","Branch conversation"),tr("تصدير نص المحادثة","Export conversation text"),tr("حذف من الموبايل","Delete from device"),tr("سجل المحادثات","Conversation history"),tr("محادثة جديدة","New conversation")};
+        String[] items={tr("تغيير الاسم","Rename"),tr("نسخة من المحادثة","Branch conversation"),tr("تصدير نص المحادثة","Export conversation text"),tr("حذف من الموبايل","Delete from device"),tr("سجل المحادثات","Conversation history"),tr("محادثة جديدة","New conversation"),tr("تغيير الموديل","Switch model"),tr("مقارنة موديلين","Compare models")};
         new AlertDialog.Builder(this).setItems(items,(d,n)->act(()->{
             if(n==0){EditText name=new EditText(this);name.setText(thread().getString("title"));new AlertDialog.Builder(this).setTitle(items[0]).setView(name).setNegativeButton(tr("رجوع","Back"),null).setPositiveButton(tr("حفظ","Save"),(a,b)->act(()->{String title=name.getText().toString().trim();if(title.isEmpty())return;store.edit(x->Store.find(x.getJSONArray("threads"),currentThread).put("title",title));draft=composer.getText().toString();show();})).show();}
             if(n==1){if(ChatService.isActive())throw new Exception(tr("استنى الرد يخلص.","Wait for the active reply."));JSONObject copy=thread();String id=Store.id();copy.put("id",id).put("title",copy.getString("title")+tr(" · نسخة"," · branch")).put("updated",System.currentTimeMillis());store.edit(x->x.getJSONArray("threads").put(copy));currentThread=id;draft="";attached="";show();}
@@ -316,11 +362,15 @@ public final class MainActivity extends Activity {
                 new AlertDialog.Builder(this).setTitle(items[4]).setItems(titles,(dialog,index)->act(()->{currentThread=related.get(index).getString("id");draft="";attached="";show();})).show();
             }
             if(n==5){JSONObject current=thread();if(Conversations.group(current)){currentThread=store.createGroup(Conversations.members(current),current.getString("title"));draft="";attached="";show();}else newThread(current.getString("botId"));}
+            if(n==6)switchModel();
+            if(n==7)compareModels();
         })).show();
     }
     private void pickImage(){startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT).setType("image/*").addCategory(Intent.CATEGORY_OPENABLE),41);}
     @Override protected void onActivityResult(int request,int result,Intent data){super.onActivityResult(request,result,data);if(result!=RESULT_OK||data==null||data.getData()==null)return;Uri uri=data.getData();
         if(request==42)act(()->{if(exportText.isEmpty())throw new Exception("Export expired. Please start export again.");try(OutputStream out=getContentResolver().openOutputStream(uri)){if(out==null)throw new IOException("Could not open destination");out.write(exportText.getBytes(StandardCharsets.UTF_8));}Toast.makeText(this,tr("تم التصدير","Exported"),Toast.LENGTH_SHORT).show();});
+        if(request==44)act(()->{if(exportText.isEmpty())throw new Exception("Export expired. Please start export again.");try(OutputStream out=getContentResolver().openOutputStream(uri)){if(out==null)throw new IOException("Could not open destination");out.write(exportText.getBytes(StandardCharsets.UTF_8));}Toast.makeText(this,tr("تم تصدير الإعدادات","Settings exported"),Toast.LENGTH_SHORT).show();});
+        if(request==45)importBotSettings(uri);
         if(request==43){new Thread(()->{try{
             byte[] bytes;try(InputStream in=getContentResolver().openInputStream(uri);ByteArrayOutputStream out=new ByteArrayOutputStream()){
                 if(in==null)throw new IOException("Cannot read photo");byte[] buf=new byte[8192];int n;while((n=in.read(buf))!=-1){out.write(buf,0,n);if(out.size()>5*1024*1024)throw new Exception("Photo limit is 5 MB");}bytes=out.toByteArray();
@@ -361,7 +411,7 @@ public final class MainActivity extends Activity {
             if(!editing){
                 LinearLayout chips=row();String[] roles={"Researcher","Coder","Writer","Analyst"};
                 for(String role:roles){TextView chip=label(role,11,MUTED);chip.setPadding(dp(10),dp(9),dp(10),dp(9));chip.setBackground(shape(BG,LINE,20));chip.setOnClickListener(v->act(()->{
-                    collect();data.put("description",role.equals("Coder")?"Writes, reviews and explains code":role.equals("Researcher")?"Researches questions and checks sources":role.equals("Writer")?"Writes and edits clear copy":"Analyzes information and explains findings");render();
+                    collect();data.put("description",role.equals("Coder")?"Writes, reviews and explains code":role.equals("Researcher")?"Researches questions and checks sources":role.equals("Writer")?"Writes and edits clear copy":"Analyzes information and explains findings");data.put("personality",role.equals("Coder")?"Be precise, show tested code, and explain tradeoffs.":role.equals("Researcher")?"Separate facts from hypotheses and cite sources when available.":role.equals("Writer")?"Write clear, polished copy and match the requested tone.":"Break problems into evidence-based steps and state uncertainty.");render();
                 }));LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-2,-2);lp.setMarginEnd(dp(5));chips.addView(chip,lp);}p.addView(chips);gap(p,20);
             }
             input(p,"name",tr("الاسم","NAME"),"Patch",false);
@@ -371,6 +421,7 @@ public final class MainActivity extends Activity {
         private void personality(LinearLayout p){
             p.addView(label(tr("تعليمات إضافية لمحادثات التطبيق. اتركها فارغة لاستخدام شخصية البوت الموجودة.","Additional instructions for app conversations. Leave empty to use your existing bot's personality."),14,MUTED));gap(p,18);
             EditText e=input(p,"personality","PERSONALITY",tr("إزاي تحب البوت يفكر ويتكلم؟","How should this bot think and communicate?"),false);e.setSingleLine(false);e.setMinLines(9);e.setGravity(Gravity.TOP);e.setInputType(android.text.InputType.TYPE_CLASS_TEXT|android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE);
+            gap(p,10);input(p,"memory",tr("ذاكرة البوت","BOT MEMORY"),tr("معلومات ثابتة يفتكرها البوت دائمًا","Facts this bot should remember"),false);
         }
         private void models(LinearLayout p)throws Exception {
             TextView defaults=button(tr("استخدم موديل Hermes الافتراضي","Use Hermes default"),false,()->{collect();data.put("model","hermes-agent").put("provider","").put("effort","");render();});p.addView(defaults);gap(p,8);
@@ -378,6 +429,10 @@ public final class MainActivity extends Activity {
             EditText model=input(p,"model",tr("الموديل","MODEL"),"hermes-agent",false);
             input(p,"provider","PROVIDER",tr("اختياري","Optional"),false);
             input(p,"effort",tr("مستوى التفكير","REASONING EFFORT"),"low / medium / high",false);
+            gap(p,10);p.addView(label(tr("موديل بديل عند فشل الموديل الأساسي","FALLBACK MODEL"),12,MUTED));gap(p,6);
+            input(p,"fallbackModel","",tr("اختياري — مثال: hermes-agent","Optional — e.g. hermes-agent"),false);
+            input(p,"fallbackProvider","FALLBACK PROVIDER",tr("اختياري","Optional"),false);
+            input(p,"fallbackEffort","FALLBACK EFFORT","low / medium / high",false);
             TextView load=button(tr("تحميل الموديلات من السيرفر","Load models from server"),false,()->{});
             load.setOnClickListener(v->act(()->{
                 collect();if(data.optString("url").isEmpty()||data.optString("key").isEmpty())throw new Exception(tr("اضبط اتصال السيرفر من الإعدادات الأول.","Set the default server connection in Settings first."));load.setEnabled(false);
@@ -400,8 +455,10 @@ public final class MainActivity extends Activity {
         private void connection(LinearLayout p){
             gap(p,24);p.addView(label(tr("اتصال Hermes الموجود","EXISTING HERMES CONNECTION"),11,MUTED));gap(p,12);
             input(p,"url","HTTPS URL","https://birella.your-tailnet.ts.net",false);
+            input(p,"profile",tr("Profile على السيرفر","SERVER PROFILE"),tr("default أو اسم Profile عند تفعيل multiplex_profiles","default or a multiplexed profile name"),false);
             input(p,"key","API KEY",tr("مفتاح Hermes API","Hermes API key"),true);
-            p.addView(label(tr("هذا يضيف اتصالًا في التطبيق، ولا ينشئ Profile جديدًا على السيرفر.","This adds an app connection. It does not create a new server profile."),12,MUTED));
+            TextView test=button(tr("اختبار اتصال البوت","Test bot connection"),false,()->{});test.setOnClickListener(v->act(()->{collect();JSONObject check=new JSONObject(data.toString());check.put("url",Endpoint.withProfile(check.optString("url"),check.optString("profile")));testConnection(check,test);}));p.addView(test);gap(p,8);
+            p.addView(label(tr("Profile لازم يكون موجودًا ومفعّلًا على السيرفر. يمكن أيضًا إدخال المسار يدويًا مثل /p/alice. هذا لا ينشئ Profile جديدًا.","The profile must already exist and multiplex routing must be enabled on the server. You can also enter /p/alice in the URL. This does not create a new server profile."),12,MUTED));
         }
         private void render()throws Exception {
             inputs.clear();LinearLayout panel=column();panel.setBackgroundColor(BG);panel.setLayoutDirection(arabic?View.LAYOUT_DIRECTION_RTL:View.LAYOUT_DIRECTION_LTR);
@@ -425,9 +482,10 @@ public final class MainActivity extends Activity {
         private void save()throws Exception {
             if(ChatService.isActive())throw new Exception("Wait for the current reply");
             if(data.optString("name").isEmpty())throw new Exception("Enter a bot name");
-            data.put("url",Endpoint.normalize(data.optString("url")));
+            data.put("url",Endpoint.withProfile(data.optString("url"),data.optString("profile")));
             String key=data.optString("key");if(key.isEmpty()||key.contains("\n")||key.contains("\r"))throw new Exception("Enter the Hermes API key");
             if(data.optString("model").isEmpty())data.put("model","hermes-agent");
+            if(data.optString("memoryKey").isEmpty())data.put("memoryKey","hermes-android:"+data.getString("id"));
             String handle=data.optString("handle");
             if(handle.isEmpty()){
                 String stem=data.optString("name").toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9_-]+","-").replaceAll("^-+|-+$", "");
