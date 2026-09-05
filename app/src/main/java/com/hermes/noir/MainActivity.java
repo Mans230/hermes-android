@@ -299,7 +299,7 @@ public final class MainActivity extends Activity {
         composer.setHint(group?tr("رسالة أو @mention…","Message or @mention…"):tr("رسالة إلى ","Message ")+b.getString("name"));composer.setInputType(android.text.InputType.TYPE_CLASS_TEXT|android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE|android.text.InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);composer.setText(draft);composer.setPadding(dp(3),dp(6),dp(5),dp(6));bar.addView(composer,new LinearLayout.LayoutParams(0,-2,1));
         TextView mic=label("🎤",15,WHITE);mic.setGravity(Gravity.CENTER);mic.setContentDescription(tr("إدخال صوتي","Voice input"));
         mic.setOnClickListener(v->{try{startActivityForResult(new Intent(android.speech.RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
-            .putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE_MODEL,android.speech.RecognizerIntent.EXTRA_LANGUAGE_MODEL_FREE_FORM)
+            .putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE_MODEL,android.speech.RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
             .putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE,arabic?"ar-EG":"en-US")
             .putExtra(android.speech.RecognizerIntent.EXTRA_PROMPT,tr("اتكلم دلوقتي…","Speak now…")),45);}
             catch(Exception e){alert(tr("الإدخال الصوتي غير متاح","Voice input unavailable"),tr("الخدمة دي مش متاحة على جهازك.","Speech recognition is not available on this device."));}});
@@ -338,9 +338,9 @@ public final class MainActivity extends Activity {
             String value;
             if(!active&&rawContent instanceof JSONArray){
                 JSONArray parts=(JSONArray)rawContent;StringBuilder partsText=new StringBuilder();
-                for(int i=0;i<parts.length();i++){JSONObject p=parts.getJSONObject(i);
-                    if(p.optString("type").equals("text"))partsText.append(p.optString("text"));
-                    else if(p.optString("type").equals("image_url")&&p.optJSONObject("image_url")!=null)images.add(p.optJSONObject("image_url").optString("url"));}
+                for(int p=0;p<parts.length();p++){JSONObject part=parts.getJSONObject(p);
+                    if(part.optString("type").equals("text"))partsText.append(part.optString("text"));
+                    else if(part.optString("type").equals("image_url")&&part.optJSONObject("image_url")!=null)images.add(part.optJSONObject("image_url").optString("url"));}
                 value=partsText.toString();
             }else value=active?ChatService.text:plain(rawContent);
             LinearLayout.LayoutParams cp=new LinearLayout.LayoutParams(user?-2:-1,-2);cp.gravity=Gravity.END;
@@ -440,10 +440,10 @@ public final class MainActivity extends Activity {
         try{
             int comma=url.indexOf(',');if(comma<0)return null;
             byte[] bytes=android.util.Base64.decode(url.substring(comma+1),android.util.Base64.DEFAULT);
-            BitmapFactory.Options bounds=new BitmapFactory.Options();bounds.inJustDecodeBounds=true;BitmapFactory.decodeByteArray(bytes,0,bounds);
+            BitmapFactory.Options bounds=new BitmapFactory.Options();bounds.inJustDecodeBounds=true;BitmapFactory.decodeByteArray(bytes,0,bytes.length,bounds);
             if(bounds.outWidth<=0||bounds.outHeight<=0)return null;
             BitmapFactory.Options opts=new BitmapFactory.Options();opts.inSampleSize=Math.max(1,Math.max(bounds.outWidth,bounds.outHeight)/512);
-            Bitmap bmp=BitmapFactory.decodeByteArray(bytes,0,opts);
+            Bitmap bmp=BitmapFactory.decodeByteArray(bytes,0,bytes.length,opts);
             if(bmp!=null){if(imageCache.size()>10)imageCache.clear();imageCache.put(key,bmp);}
             return bmp;
         }catch(Exception e){return null;}
