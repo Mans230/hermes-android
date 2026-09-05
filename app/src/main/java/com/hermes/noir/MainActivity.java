@@ -254,7 +254,7 @@ public final class MainActivity extends Activity {
         }));gap(body,14);
         body.addView(button(fontLabel(),false,()->{float s=chatScale();store.edit(d->d.put("chatScale",s>1.05?0.85:s<0.95?1.0:1.15));show();}));gap(body,14);
         body.addView(button(tr("إظهار المحادثات المؤرشفة: ","Show archived conversations: ")+(store.read().optBoolean("showArchived",false)?tr("نعم","Yes"):tr("لا","No")),false,()->{store.edit(d->d.put("showArchived",!d.optBoolean("showArchived",false)));show();}));gap(body,24);
-        body.addView(label(tr("الضغط المطوّل على البوت يفتح قائمته (تعديل، تثبيت، نسخة). الضغط المطوّل على رسالتك يتيح تعديلها وإعادة إرسالها.\n\nالمحادثات والمفاتيح مشفّرة على الجهاز. الإشعارات للردود التي تبدأها هنا فقط.\n\nإعداد الشخصية يخص محادثات التطبيق؛ لا يغيّر SOUL.md على السيرفر.","Long-press a bot for its menu (edit, pin, duplicate). Long-press your own message to edit and resend it.\n\nChats and keys are encrypted on this device. Notifications cover replies started here.\n\nPersonality applies to app requests; it does not modify server SOUL.md."),14,MUTED));gap(body,32);body.addView(label("Hermes · Android client 0.5.0",12,MUTED));
+        body.addView(label(tr("الضغط المطوّل على البوت يفتح قائمته (تعديل، تثبيت، نسخة). الضغط المطوّل على رسالتك يتيح تعديلها وإعادة إرسالها.\n\nالمحادثات والمفاتيح مشفّرة على الجهاز. الإشعارات للردود التي تبدأها هنا فقط.\n\nإعداد الشخصية يخص محادثات التطبيق؛ لا يغيّر SOUL.md على السيرفر.","Long-press a bot for its menu (edit, pin, duplicate). Long-press your own message to edit and resend it.\n\nChats and keys are encrypted on this device. Notifications cover replies started here.\n\nPersonality applies to app requests; it does not modify server SOUL.md."),14,MUTED));gap(body,32);body.addView(label("Hermes · Android client 0.6.0",12,MUTED));
     }
     private String fontLabel()throws Exception {
         float s=chatScale();
@@ -481,29 +481,66 @@ public final class MainActivity extends Activity {
 
     private void chatMenu()throws Exception {
         boolean group=Conversations.group(thread());
-        java.util.List<String> choices=new ArrayList<>(java.util.Arrays.asList(tr("تغيير الاسم","Rename")));
-        if(group)choices.add(tr("إعدادات الجروب","Group settings"));
-        choices.addAll(java.util.Arrays.asList(
-            tr("نسخة من المحادثة","Branch conversation"),tr("تصدير نص المحادثة","Export conversation text"),tr("تصدير Markdown","Export Markdown"),tr("أرشفة المحادثة","Archive conversation"),tr("حذف من الموبايل","Delete from device"),tr("سجل المحادثات","Conversation history"),tr("محادثة جديدة","New conversation")));
-        String[] items=choices.toArray(new String[0]);
-        final int base=group?1:0;
+        java.util.List<String> labels=new ArrayList<>();final java.util.List<Integer> codes=new ArrayList<>();
+        labels.add(tr("تغيير الاسم","Rename"));codes.add(0);
+        if(group){labels.add(tr("إعدادات الجروب","Group settings"));codes.add(1);}
+        labels.add(tr("نسخة من المحادثة","Branch conversation"));codes.add(2);
+        labels.add(tr("تصدير نص المحادثة","Export conversation text"));codes.add(3);
+        labels.add(tr("تصدير Markdown","Export Markdown"));codes.add(4);
+        labels.add(tr("أرشفة المحادثة","Archive conversation"));codes.add(5);
+        if(!group){labels.add(tr("📬 فحص الوارد (Inbox)","📬 Check inbox"));codes.add(9);labels.add(tr("✉️ إرسال إيميل","✉️ Send email"));codes.add(10);}
+        labels.add(tr("حذف من الموبايل","Delete from device"));codes.add(6);
+        labels.add(tr("سجل المحادثات","Conversation history"));codes.add(7);
+        labels.add(tr("محادثة جديدة","New conversation"));codes.add(8);
+        String[] items=labels.toArray(new String[0]);
         new AlertDialog.Builder(this).setItems(items,(d,n)->act(()->{
-            if(n==0){EditText name=new EditText(this);name.setText(thread().getString("title"));new AlertDialog.Builder(this).setTitle(items[0]).setView(name).setNegativeButton(tr("رجوع","Back"),null).setPositiveButton(tr("حفظ","Save"),(a,b)->act(()->{String title=name.getText().toString().trim();if(title.isEmpty())return;store.edit(x->Store.find(x.getJSONArray("threads"),currentThread).put("title",title));draft=composer.getText().toString();show();})).show();}
-            if(n==1&&group)groupSettingsDialog();
-            if(n==base+1){if(ChatService.isActive())throw new Exception(tr("استنى الرد يخلص.","Wait for the active reply."));JSONObject copy=thread();String id=Store.id();copy.put("id",id).put("title",copy.getString("title")+tr(" · نسخة"," · branch")).put("updated",System.currentTimeMillis());store.edit(x->x.getJSONArray("threads").put(copy));currentThread=id;draft="";attached="";show();}
-            if(n==base+2){StringBuilder text=new StringBuilder(thread().getString("title")+"\n\n");JSONArray rows=thread().getJSONArray("messages");for(int i=0;i<rows.length();i++){JSONObject m=rows.getJSONObject(i);text.append(m.optString("role")).append(":\n").append(plain(m.opt("content"))).append("\n\n");}exportText=text.toString();exportName="hermes-conversation.txt";startActivityForResult(new Intent(Intent.ACTION_CREATE_DOCUMENT).setType("text/plain").addCategory(Intent.CATEGORY_OPENABLE).putExtra(Intent.EXTRA_TITLE,exportName),42);}
-            if(n==base+3){exportText=markdownExport();exportName="hermes-conversation.md";startActivityForResult(new Intent(Intent.ACTION_CREATE_DOCUMENT).setType("text/markdown").addCategory(Intent.CATEGORY_OPENABLE).putExtra(Intent.EXTRA_TITLE,exportName),42);}
-            if(n==base+4){store.edit(x->Store.find(x.getJSONArray("threads"),currentThread).put("archived",true));Toast.makeText(this,tr("اتأرشفت — تلاقيها من الإعدادات","Archived — find it in Settings"),Toast.LENGTH_SHORT).show();page="bots";draft="";attached="";show();}
-            if(n==base+5){if(ChatService.isActive())throw new Exception(tr("استنى الرد يخلص.","Wait for the active reply."));new AlertDialog.Builder(this).setTitle(items[base+5]).setMessage(tr("هتتحذف المحادثة من التطبيق فقط.","This deletes the conversation from this app."))
+            int code=codes.get(n);
+            if(code==0){EditText name=new EditText(this);name.setText(thread().getString("title"));new AlertDialog.Builder(this).setTitle(items[0]).setView(name).setNegativeButton(tr("رجوع","Back"),null).setPositiveButton(tr("حفظ","Save"),(a,b)->act(()->{String title=name.getText().toString().trim();if(title.isEmpty())return;store.edit(x->Store.find(x.getJSONArray("threads"),currentThread).put("title",title));draft=composer.getText().toString();show();})).show();}
+            if(code==1)groupSettingsDialog();
+            if(code==2){if(ChatService.isActive())throw new Exception(tr("استنى الرد يخلص.","Wait for the active reply."));JSONObject copy=thread();String id=Store.id();copy.put("id",id).put("title",copy.getString("title")+tr(" · نسخة"," · branch")).put("updated",System.currentTimeMillis());store.edit(x->x.getJSONArray("threads").put(copy));currentThread=id;draft="";attached="";show();}
+            if(code==3){StringBuilder text=new StringBuilder(thread().getString("title")+"\n\n");JSONArray rows=thread().getJSONArray("messages");for(int i=0;i<rows.length();i++){JSONObject m=rows.getJSONObject(i);text.append(m.optString("role")).append(":\n").append(plain(m.opt("content"))).append("\n\n");}exportText=text.toString();exportName="hermes-conversation.txt";startActivityForResult(new Intent(Intent.ACTION_CREATE_DOCUMENT).setType("text/plain").addCategory(Intent.CATEGORY_OPENABLE).putExtra(Intent.EXTRA_TITLE,exportName),42);}
+            if(code==4){exportText=markdownExport();exportName="hermes-conversation.md";startActivityForResult(new Intent(Intent.ACTION_CREATE_DOCUMENT).setType("text/markdown").addCategory(Intent.CATEGORY_OPENABLE).putExtra(Intent.EXTRA_TITLE,exportName),42);}
+            if(code==5){store.edit(x->Store.find(x.getJSONArray("threads"),currentThread).put("archived",true));Toast.makeText(this,tr("اتأرشفت — تلاقيها من الإعدادات","Archived — find it in Settings"),Toast.LENGTH_SHORT).show();page="bots";draft="";attached="";show();}
+            if(code==6){if(ChatService.isActive())throw new Exception(tr("استنى الرد يخلص.","Wait for the active reply."));new AlertDialog.Builder(this).setTitle(items[n]).setMessage(tr("هتتحذف المحادثة من التطبيق فقط.","This deletes the conversation from this app."))
                 .setNegativeButton(tr("رجوع","Back"),null).setPositiveButton(tr("حذف","Delete"),(a,b)->act(()->{store.edit(x->{JSONArray rows=x.getJSONArray("threads");for(int i=rows.length()-1;i>=0;i--)if(rows.getJSONObject(i).getString("id").equals(currentThread))rows.remove(i);});page="bots";draft="";attached="";show();})).show();}
-            if(n==base+6){
+            if(code==7){
                 JSONObject current=thread();JSONArray rows=store.read().getJSONArray("threads");ArrayList<JSONObject> related=new ArrayList<>();
                 for(int i=0;i<rows.length();i++){JSONObject r=rows.getJSONObject(i);if(Conversations.members(r).toString().equals(Conversations.members(current).toString()))related.add(r);}
                 related.sort((a,b)->Long.compare(b.optLong("updated"),a.optLong("updated")));String[] titles=new String[related.size()];for(int i=0;i<titles.length;i++)titles[i]=related.get(i).getString("title");
-                new AlertDialog.Builder(this).setTitle(items[base+6]).setItems(titles,(dialog,index)->act(()->{currentThread=related.get(index).getString("id");draft="";attached="";show();})).show();
+                new AlertDialog.Builder(this).setTitle(items[n]).setItems(titles,(dialog,index)->act(()->{currentThread=related.get(index).getString("id");draft="";attached="";show();})).show();
             }
-            if(n==base+7){JSONObject current=thread();if(Conversations.group(current)){currentThread=store.createGroup(Conversations.members(current),current.getString("title"));draft="";attached="";show();}else newThread(current.getString("botId"));}
+            if(code==8){JSONObject current=thread();if(Conversations.group(current)){currentThread=store.createGroup(Conversations.members(current),current.getString("title"));draft="";attached="";show();}else newThread(current.getString("botId"));}
+            if(code==9)checkInbox();
+            if(code==10)composeEmail();
         })).show();
+    }
+    private void checkInbox()throws Exception {
+        JSONObject t=thread();JSONObject b=bot(t.getString("botId"));
+        String mail=b.optString("email","");
+        if(mail.isEmpty()){alert(tr("مفيش إيميل للبوت","No bot mailbox"),tr("من تعديل البوت، اكتبله إيميل في خانة Hermes Mail Agent الأول.","Set the bot's email under Hermes Mail Agent in Edit bot first."));editBot(b);return;}
+        if(ChatService.isActive())throw new Exception(tr("استنى الرد يخلص.","Wait for the active reply."));
+        composer.setText(tr("افحص صندوق الوارد بتاعك ("+mail+") عبر أدوات البريد، ولخص أي رسايل جديدة وحالة المهمة.","Check your inbox ("+mail+") with your mail tools, then summarize any new mail and anything needing action."));
+        send(false);
+    }
+    private void composeEmail()throws Exception {
+        JSONObject t=thread();JSONObject b=bot(t.getString("botId"));
+        String mail=b.optString("email","");
+        if(mail.isEmpty()){alert(tr("مفيش إيميل للبوت","No bot mailbox"),tr("من تعديل البوت، اكتبله إيميل في خانة Hermes Mail Agent الأول.","Set the bot's email under Hermes Mail Agent in Edit bot first."));editBot(b);return;}
+        LinearLayout form=column();form.setPadding(dp(22),dp(12),dp(22),dp(12));
+        form.addView(label(tr("من: ","From: ")+mail,12,MUTED));gap(form,12);
+        EditText to=field(form,"TO","",false);to.setHint("name@example.com");
+        EditText subject=field(form,tr("الموضوع","SUBJECT"),"",false);
+        EditText body=field(form,tr("الرسالة","BODY"),"",false);body.setSingleLine(false);body.setMinLines(4);
+        new AlertDialog.Builder(this).setTitle(tr("إرسال إيميل عن طريق ","Send email via ")+b.optString("name")).setView(form)
+            .setNegativeButton(tr("رجوع","Cancel"),null)
+            .setPositiveButton(tr("إرسال","Send"),(a,btn)->act(()->{
+                String dest=to.getText().toString().trim(),subj=subject.getText().toString().trim(),text=body.getText().toString().trim();
+                if(dest.isEmpty()||!dest.matches("[^@\\s]+@[^@\\s]+\\.[^@\\s]+"))throw new Exception(tr("اكتب إيميل مستلم صحيح.","Enter a valid recipient email."));
+                if(ChatService.isActive())throw new Exception(tr("استنى الرد يخلص.","Wait for the active reply."));
+                composer.setText(tr("أرسل إيميلًا بأدوات البريد (Hermes Mail Agent):\nمن: "+mail+"\nإلى: "+dest+"\nالموضوع: "+subj+"\n\n"+text,
+                    "Send an email with your mail tools (Hermes Mail Agent):\nFrom: "+mail+"\nTo: "+dest+"\nSubject: "+subj+"\n\n"+text));
+                send(false);
+            })).show();
     }
     private String markdownExport()throws Exception {
         JSONObject t=thread();StringBuilder text=new StringBuilder("# "+t.getString("title")+"\n");
@@ -583,6 +620,7 @@ public final class MainActivity extends Activity {
             }
             input(p,"name",tr("الاسم","NAME"),"Patch",false);
             input(p,"description",tr("دوره إيه؟","WHAT IS ITS JOB?"),tr("وصف قصير لدور البوت","A short description of this bot's role"),false);
+            input(p,"email",tr("الإيميل (Hermes Mail Agent)","EMAIL (Hermes Mail Agent)"),tr("اختياري — صندوق بريد خاص بالبوت","Optional — the bot's own mailbox"),false);
             if(editing)input(p,"handle",tr("اسم الإشارة","MENTION HANDLE"),Conversations.handle(data),false);
         }
         private void personality(LinearLayout p){
