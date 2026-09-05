@@ -107,8 +107,9 @@ public final class ChatService extends Service {
                 store.edit(d->{
                     JSONObject target=Store.find(d.getJSONArray("threads"),activeThread);
                     JSONObject reply=Conversations.reply(target.getJSONArray("messages"),id);
-                    reply.put("content",result.getString("content")).put("status","done")
-                        .put("model",result.optString("model")).put("usage",result.getJSONObject("usage")).put("tools",tools);
+                            reply.put("content",result.getString("content")).put("status","done")
+                                .put("ts",System.currentTimeMillis())
+                                .put("model",result.optString("model")).put("usage",result.getJSONObject("usage")).put("tools",tools);
                     target.put("updated",System.currentTimeMillis());
                 });
             }catch(Exception e){

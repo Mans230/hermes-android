@@ -26,11 +26,13 @@ public final class MainActivity extends Activity {
     private ScrollView chatScroll;
     private EditText composer;
     private TextView attachmentLabel, sendButton, relayLabel;
-    private String page="bots", currentThread="", visibleThread="", attached="", draft="", exportText="";
+    private String page="bots", currentThread="", visibleThread="", attached="", draft="", exportText="", exportName="hermes-conversation.txt", query="";
     private boolean arabic=false;
     private BotWizard openWizard;
     private final Handler handler=new Handler(Looper.getMainLooper());
     private long revision=-1;
+    private final Runnable searchRefresh=()->act(()->{if(page.equals("bots")&&body!=null){body.removeAllViews();showBots();}});
+    private float chatScale()throws Exception {return (float)store.read().optDouble("chatScale",1.0);}
     private interface Task { void go() throws Exception; }
     private final Runnable poll=new Runnable(){public void run(){
         if(ChatService.revision!=revision){revision=ChatService.revision;if(page.equals("chat"))act(()->renderMessages());}
@@ -94,6 +96,18 @@ public final class MainActivity extends Activity {
         if(page.equals("settings")){
             LinearLayout top=row();top.setPadding(dp(12),dp(12),dp(20),dp(8));top.addView(back(()->{page="bots";show();}));top.addView(label(tr("الإعدادات","Settings"),24,WHITE));root.addView(top);
         }else header(tr("البوتات","Bots"),"○  "+store.read().optString("serverName","birella"));
+        if(page.equals("bots")){
+            LinearLayout searchRow=row();searchRow.setPadding(dp(20),dp(10),dp(20),dp(2));
+            EditText search=new EditText(this);search.setSingleLine(true);search.setTextSize(14);search.setTextColor(WHITE);search.setHintTextColor(MUTED);
+            search.setHint(tr("بحث في البوتات والمحادثات…","Search bots and chats…"));search.setText(query);
+            search.setBackground(shape(0xff0c0c0c,LINE,22));search.setPadding(dp(16),dp(10),dp(16),dp(10));
+            search.addTextChangedListener(new android.text.TextWatcher(){
+                public void beforeTextChanged(CharSequence s,int a,int b,int c){}
+                public void onTextChanged(CharSequence s,int a,int b,int c){}
+                public void afterTextChanged(android.text.Editable s){query=s.toString();handler.removeCallbacks(searchRefresh);handler.postDelayed(searchRefresh,300);}
+            });
+            searchRow.addView(search,new LinearLayout.LayoutParams(-1,-2));root.addView(searchRow);
+        }
         ScrollView scroll=new ScrollView(this);scroll.setFillViewport(true);body=column();body.setPadding(dp(20),dp(8),dp(20),dp(12));scroll.addView(body);root.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));
         if(page.equals("settings")){showSettings();return;}
         showBots();
@@ -108,6 +122,7 @@ public final class MainActivity extends Activity {
 
     private void showBots()throws Exception {
         JSONObject data=store.read();JSONArray bots=data.getJSONArray("bots"),threads=data.getJSONArray("threads");
+        String q=query.trim().toLowerCase(Locale.ROOT);boolean showArchived=data.optBoolean("showArchived",false);
         ArrayList<JSONObject> entries=new ArrayList<>();
         for(int i=0;i<bots.length();i++){
             JSONObject b=bots.getJSONObject(i),latest=null;
@@ -115,26 +130,75 @@ public final class MainActivity extends Activity {
             entries.add(new JSONObject().put("bot",b).put("thread",latest==null?JSONObject.NULL:latest).put("updated",latest==null?0:latest.optLong("updated")));
         }
         for(int i=0;i<threads.length();i++)if(Conversations.group(threads.getJSONObject(i)))entries.add(new JSONObject().put("thread",threads.getJSONObject(i)).put("updated",threads.getJSONObject(i).optLong("updated")));
-        entries.sort((a,b)->Long.compare(b.optLong("updated"),a.optLong("updated")));
-        if(entries.isEmpty()){
-            gap(body,60);TextView empty=label(tr("بوتاتك هتظهر هنا","Your bots will appear here"),18,WHITE);empty.setGravity(Gravity.CENTER);body.addView(empty);gap(body,10);
-            TextView hint=label(tr("وصّل أول بوت عشان تبدأ.","Connect your first bot to get started."),14,MUTED);hint.setGravity(Gravity.CENTER);body.addView(hint);
-        }
+        ArrayList<JSONObject> visible=new ArrayList<>();
         for(JSONObject entry:entries){
+            JSONObject b=entry.optJSONObject("bot"),t=entry.optJSONObject("thread");
+            if(t!=null&&t.optBoolean("archived",false)&&!showArchived)continue;
+            if(!q.isEmpty()&&!matches(entry,b,t,q))continue;
+            visible.add(entry);
+        }
+        visible.sort((a,c)->{
+            boolean pa=pinned(a),pc=pinned(c);
+            if(pa!=pc)return pa?-1:1;
+            return Long.compare(c.optLong("updated"),a.optLong("updated"));
+        });
+        if(visible.isEmpty()){
+            gap(body,60);TextView empty=label(q.isEmpty()?tr("بوتاتك هتظهر هنا","Your bots will appear here"):tr("مفيش نتائج للبحث","No search results"),18,WHITE);empty.setGravity(Gravity.CENTER);body.addView(empty);gap(body,10);
+            TextView hint=label(q.isEmpty()?tr("وصّل أول بوت عشان تبدأ.","Connect your first bot to get started."):tr("جرب كلمة تانية.","Try another word."),14,MUTED);hint.setGravity(Gravity.CENTER);body.addView(hint);
+        }
+        for(JSONObject entry:visible){
             JSONObject b=entry.optJSONObject("bot"),t=entry.optJSONObject("thread");boolean group=b==null;
             LinearLayout line=row();line.setPadding(0,dp(13),0,dp(13));
             line.addView(avatar(group?null:b,44),new LinearLayout.LayoutParams(dp(44),dp(44)));
             LinearLayout words=column();words.setPadding(dp(12),0,dp(8),0);
-            TextView title=label(group?t.getString("title"):b.getString("name"),16,WHITE);title.setTypeface(null,Typeface.BOLD);title.setMaxLines(1);title.setEllipsize(TextUtils.TruncateAt.END);words.addView(title);gap(words,4);
-            JSONArray messages=t==null?new JSONArray():t.getJSONArray("messages");String preview=messages.length()==0?(group?tr("جروب جديد","New group"):b.optString("description",tr("لا توجد رسائل بعد","No messages yet"))):plain(messages.getJSONObject(messages.length()-1).opt("content"));
+            boolean pin=pinned(entry);
+            TextView title=label((pin?"📌 ":"")+(group?t.getString("title"):b.getString("name")),16,WHITE);title.setTypeface(null,Typeface.BOLD);title.setMaxLines(1);title.setEllipsize(TextUtils.TruncateAt.END);words.addView(title);gap(words,4);
+            JSONArray messages=t==null?new JSONArray():t.getJSONArray("messages");String preview=messages.length()==0?(group?t.optString("description",tr("جروب جديد","New group")):b.optString("description",tr("لا توجد رسائل بعد","No messages yet"))):plain(messages.getJSONObject(messages.length()-1).opt("content"));
             TextView subtitle=label(preview.isEmpty()?tr("لا توجد رسائل بعد","No messages yet"):preview,13,MUTED);subtitle.setMaxLines(1);subtitle.setEllipsize(TextUtils.TruncateAt.END);words.addView(subtitle);line.addView(words,new LinearLayout.LayoutParams(0,-2,1));
             if(t!=null){
                 LinearLayout meta=column();meta.setGravity(Gravity.END);meta.addView(label(DateFormat.getTimeInstance(DateFormat.SHORT).format(new Date(t.optLong("updated"))),10,MUTED));
                 if(t.optLong("updated")>t.optLong("readAt")&&messages.length()>0&&messages.getJSONObject(messages.length()-1).optString("role").equals("assistant")){gap(meta,6);meta.addView(label("●",10,WHITE));}line.addView(meta);
             }
             line.setOnClickListener(v->act(()->{if(t==null)newThread(b.getString("id"));else{currentThread=t.getString("id");page="chat";draft="";attached="";show();}}));
-            line.setOnLongClickListener(v->{act(()->{if(b!=null)editBot(b);else{currentThread=t.getString("id");page="chat";show();chatMenu();}});return true;});body.addView(line);
+            line.setOnLongClickListener(v->{act(()->{if(b!=null)botMenu(b);else{currentThread=t.getString("id");page="chat";show();chatMenu();}});return true;});body.addView(line);
         }
+    }
+    private boolean pinned(JSONObject entry){
+        JSONObject b=entry.optJSONObject("bot");
+        if(b!=null)return b.optBoolean("pinned",false);
+        return entry.optJSONObject("thread")!=null&&entry.optJSONObject("thread").optBoolean("pinned",false);
+    }
+    private boolean matches(JSONObject entry,JSONObject b,JSONObject t,String q)throws Exception {
+        if(b!=null&&(b.optString("name").toLowerCase(Locale.ROOT).contains(q)||b.optString("description").toLowerCase(Locale.ROOT).contains(q)))return true;
+        if(t!=null){
+            if(t.optString("title").toLowerCase(Locale.ROOT).contains(q)||t.optString("description").toLowerCase(Locale.ROOT).contains(q))return true;
+            JSONArray rows=t.getJSONArray("messages");
+            for(int i=rows.length()-1;i>=0;i--){if(plain(rows.getJSONObject(i).opt("content")).toLowerCase(Locale.ROOT).contains(q))return true;}
+        }
+        return false;
+    }
+    private void botMenu(JSONObject b)throws Exception {
+        String pin=b.optBoolean("pinned",false)?tr("إلغاء التثبيت","Unpin"):tr("تثبيت في الأعلى","Pin to top");
+        String[] items={tr("تعديل البوت","Edit bot"),pin,tr("نسخة من البوت","Duplicate bot")};
+        new AlertDialog.Builder(this).setTitle(b.optString("avatar","🤖")+" "+b.getString("name")).setItems(items,(d,n)->act(()->{
+            if(n==0)editBot(b);
+            if(n==1){store.edit(x->{boolean value=!Store.find(x.getJSONArray("bots"),b.getString("id")).optBoolean("pinned",false);Store.find(x.getJSONArray("bots"),b.getString("id")).put("pinned",value);});show();}
+            if(n==2)duplicateBot(b);
+        })).show();
+    }
+    private void duplicateBot(JSONObject original)throws Exception {
+        if(ChatService.isActive())throw new Exception(tr("استنى الرد يخلص.","Wait for the active reply."));
+        store.edit(d->{
+            JSONArray bots=d.getJSONArray("bots");
+            JSONObject copy=new JSONObject(original.toString());
+            copy.put("id",Store.id()).put("name",original.optString("name")+tr(" · نسخة"," · copy")).put("pinned",false);
+            String base=Conversations.handle(copy);String handle=base;int suffix=2;
+            boolean clash=true;
+            while(clash){clash=false;for(int i=0;i<bots.length();i++)if(Conversations.handle(bots.getJSONObject(i)).equals(handle)){clash=true;break;}if(clash)handle=base+"_"+(suffix++);}
+            copy.put("handle",MentionRouter.handle(handle));
+            bots.put(copy);
+        });
+        show();
     }
     private View avatar(JSONObject bot,int size){
         String photo=bot==null?"":bot.optString("photo", "");
@@ -187,8 +251,14 @@ public final class MainActivity extends Activity {
         body.addView(button(tr("إشعارات الردود","Reply notifications"),false,()->{
             if(Build.VERSION.SDK_INT>=33&&checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED)requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS},9);
             else startActivity(new Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(android.provider.Settings.EXTRA_APP_PACKAGE,getPackageName()));
-        }));gap(body,24);
-        body.addView(label(tr("الضغط المطوّل على البوت يفتح إعداداته.\n\nالمحادثات والمفاتيح مشفّرة على الجهاز. سجل Telegram مستقل. الإشعارات للردود التي تبدأها هنا فقط.\n\nإعداد الشخصية يخص محادثات التطبيق؛ لا يغيّر SOUL.md على السيرفر.","Long-press a bot to edit its identity and connection.\n\nChats and keys are encrypted on this device. Telegram history is separate. Notifications cover replies started here.\n\nPersonality applies to app requests; it does not modify server SOUL.md."),14,MUTED));gap(body,32);body.addView(label("Hermes · Android client 0.3.0",12,MUTED));
+        }));gap(body,14);
+        body.addView(button(fontLabel(),false,()->{float s=chatScale();store.edit(d->d.put("chatScale",s>1.05?0.85:s<0.95?1.0:1.15));show();}));gap(body,14);
+        body.addView(button(tr("إظهار المحادثات المؤرشفة: ","Show archived conversations: ")+(store.read().optBoolean("showArchived",false)?tr("نعم","Yes"):tr("لا","No")),false,()->{store.edit(d->d.put("showArchived",!d.optBoolean("showArchived",false)));show();}));gap(body,24);
+        body.addView(label(tr("الضغط المطوّل على البوت يفتح قائمته (تعديل، تثبيت، نسخة). الضغط المطوّل على رسالتك يتيح تعديلها وإعادة إرسالها.\n\nالمحادثات والمفاتيح مشفّرة على الجهاز. الإشعارات للردود التي تبدأها هنا فقط.\n\nإعداد الشخصية يخص محادثات التطبيق؛ لا يغيّر SOUL.md على السيرفر.","Long-press a bot for its menu (edit, pin, duplicate). Long-press your own message to edit and resend it.\n\nChats and keys are encrypted on this device. Notifications cover replies started here.\n\nPersonality applies to app requests; it does not modify server SOUL.md."),14,MUTED));gap(body,32);body.addView(label("Hermes · Android client 0.4.0",12,MUTED));
+    }
+    private String fontLabel()throws Exception {
+        float s=chatScale();
+        return tr("حجم خط الشات: ","Chat font size: ")+(s>1.05?tr("كبير","Large"):s>0.95?tr("عادي","Normal"):tr("صغير","Small"));
     }
     private void editServer()throws Exception {
         JSONObject current=store.read().optJSONObject("server");LinearLayout form=column();form.setPadding(dp(22),dp(16),dp(22),dp(16));
@@ -256,11 +326,18 @@ public final class MainActivity extends Activity {
             }
             boolean active=pending&&currentThread.equals(ChatService.threadId)&&m.optString("id").equals(ChatService.replyId);
             String value=active?ChatService.text:plain(m.opt("content"));
+            float scale=chatScale();
             if(!value.isEmpty()){
-                TextView content=label("",16,user?BG:WHITE);content.setLineSpacing(dp(3),1);content.setTextIsSelectable(true);content.setTextDirection(View.TEXT_DIRECTION_FIRST_STRONG);content.setText(markdown(value));
+                TextView content=label("",16*scale,user?BG:WHITE);content.setLineSpacing(dp(3),1);content.setTextIsSelectable(true);content.setTextDirection(View.TEXT_DIRECTION_FIRST_STRONG);content.setText(markdown(value));
                 LinearLayout.LayoutParams cp=new LinearLayout.LayoutParams(user?-2:-1,-2);cp.gravity=Gravity.END;
                 if(user){content.setMaxWidth(getResources().getDisplayMetrics().widthPixels-dp(85));content.setPadding(dp(14),dp(10),dp(14),dp(10));content.setBackground(shape(WHITE,0,21));}
+                if(user&&!pending&&!m.optString("status").equals("error"))content.setOnLongClickListener(v->{act(()->resendDialog(m));return true;});
                 outer.addView(content,cp);
+            }
+            if(!pending&&m.optLong("ts",0)>0){
+                TextView time=label(DateFormat.getTimeInstance(DateFormat.SHORT).format(new Date(m.optLong("ts"))),10*scale,MUTED);
+                LinearLayout.LayoutParams tp=new LinearLayout.LayoutParams(-2,-2);if(user)tp.gravity=Gravity.END;
+                gap(outer,4);outer.addView(time,tp);
             }
             JSONArray tools=active?new JSONArray(ChatService.activity):m.optJSONArray("tools");
             if(tools!=null&&tools.length()>0){
@@ -285,6 +362,20 @@ public final class MainActivity extends Activity {
         relayBar.setVisibility(active?View.VISIBLE:View.GONE);
         if(active)relayLabel.setText("⟳ "+tr("جولة حوار ","Discussion round ")+ChatService.relayRound+"/"+ChatService.relayTotal+(ChatService.relayStop?" · "+tr("بيقف بعد الرد الحالي…","stopping after this reply…"):""));
     }
+    private void resendDialog(JSONObject m)throws Exception {
+        if(ChatService.isActive())throw new Exception(tr("استنى الرد يخلص.","Wait for the active reply."));
+        boolean image=!(m.opt("content") instanceof String);
+        LinearLayout form=column();form.setPadding(dp(22),dp(12),dp(22),dp(12));
+        EditText text=field(form,tr("عدّل رسالتك","Edit your message"),plain(m.opt("content")),false);text.setSingleLine(false);text.setMinLines(3);
+        if(image)form.addView(label(tr("ملحوظة: الصورة المرفقة أصلًا مش هتتبعت مع النسخة الجديدة.","Note: the originally attached image will not be resent with the new copy."),12,MUTED));
+        new AlertDialog.Builder(this).setTitle(tr("تعديل وإعادة إرسال","Edit and resend")).setView(form)
+            .setNegativeButton(tr("رجوع","Cancel"),null)
+            .setPositiveButton(tr("إرسال","Send"),(a,b)->act(()->{
+                String value=text.getText().toString().trim();if(value.isEmpty())return;
+                if(ChatService.isActive())throw new Exception(tr("استنى الرد يخلص.","Wait for the active reply."));
+                composer.setText(value);send(false);
+            })).show();
+    }
 
     private CharSequence markdown(String input){
         SpannableStringBuilder out=new SpannableStringBuilder();String[] pieces=input.split("```",-1);
@@ -308,7 +399,7 @@ public final class MainActivity extends Activity {
             JSONObject target=Store.find(d.getJSONArray("threads"),id);JSONArray rows=target.getJSONArray("messages");
             if(retryBot==null){Object content=message;
                 if(!image.isEmpty())content=new JSONArray().put(new JSONObject().put("type","text").put("text",message.isEmpty()?"Describe this image":message)).put(new JSONObject().put("type","image_url").put("image_url",new JSONObject().put("url",image)));
-                rows.put(new JSONObject().put("id",Store.id()).put("turn",turn).put("role","user").put("content",content).put("status","done"));
+                rows.put(new JSONObject().put("id",Store.id()).put("turn",turn).put("role","user").put("content",content).put("status","done").put("ts",System.currentTimeMillis()));
                 if(rows.length()==1&&!Conversations.group(target))target.put("title",message.isEmpty()?tr("صورة","Image"):message.substring(0,Math.min(45,message.length())));
             }
             for(String botId:recipients)rows.put(Conversations.pending(Store.find(d.getJSONArray("bots"),botId),turn));target.put("updated",System.currentTimeMillis());
@@ -320,38 +411,61 @@ public final class MainActivity extends Activity {
 
     private void chatMenu()throws Exception {
         boolean group=Conversations.group(thread());
-        java.util.List<String> choices=new ArrayList<>(java.util.Arrays.asList(
-            tr("تغيير الاسم","Rename"),tr("نسخة من المحادثة","Branch conversation"),tr("تصدير نص المحادثة","Export conversation text"),tr("حذف من الموبايل","Delete from device"),tr("سجل المحادثات","Conversation history"),tr("محادثة جديدة","New conversation")));
-        if(group)choices.add(tr("جولات الحوار التتابع","Relay discussion rounds"));
+        java.util.List<String> choices=new ArrayList<>(java.util.Arrays.asList(tr("تغيير الاسم","Rename")));
+        if(group)choices.add(tr("إعدادات الجروب","Group settings"));
+        choices.addAll(java.util.Arrays.asList(
+            tr("نسخة من المحادثة","Branch conversation"),tr("تصدير نص المحادثة","Export conversation text"),tr("تصدير Markdown","Export Markdown"),tr("أرشفة المحادثة","Archive conversation"),tr("حذف من الموبايل","Delete from device"),tr("سجل المحادثات","Conversation history"),tr("محادثة جديدة","New conversation")));
         String[] items=choices.toArray(new String[0]);
+        final int base=group?1:0;
         new AlertDialog.Builder(this).setItems(items,(d,n)->act(()->{
             if(n==0){EditText name=new EditText(this);name.setText(thread().getString("title"));new AlertDialog.Builder(this).setTitle(items[0]).setView(name).setNegativeButton(tr("رجوع","Back"),null).setPositiveButton(tr("حفظ","Save"),(a,b)->act(()->{String title=name.getText().toString().trim();if(title.isEmpty())return;store.edit(x->Store.find(x.getJSONArray("threads"),currentThread).put("title",title));draft=composer.getText().toString();show();})).show();}
-            if(n==1){if(ChatService.isActive())throw new Exception(tr("استنى الرد يخلص.","Wait for the active reply."));JSONObject copy=thread();String id=Store.id();copy.put("id",id).put("title",copy.getString("title")+tr(" · نسخة"," · branch")).put("updated",System.currentTimeMillis());store.edit(x->x.getJSONArray("threads").put(copy));currentThread=id;draft="";attached="";show();}
-            if(n==2){StringBuilder text=new StringBuilder(thread().getString("title")+"\n\n");JSONArray rows=thread().getJSONArray("messages");for(int i=0;i<rows.length();i++){JSONObject m=rows.getJSONObject(i);text.append(m.optString("role")).append(":\n").append(plain(m.opt("content"))).append("\n\n");}exportText=text.toString();startActivityForResult(new Intent(Intent.ACTION_CREATE_DOCUMENT).setType("text/plain").addCategory(Intent.CATEGORY_OPENABLE).putExtra(Intent.EXTRA_TITLE,"hermes-conversation.txt"),42);}
-            if(n==3){if(ChatService.isActive())throw new Exception(tr("استنى الرد يخلص.","Wait for the active reply."));new AlertDialog.Builder(this).setTitle(items[3]).setMessage(tr("هتتحذف المحادثة من التطبيق فقط.","This deletes the conversation from this app."))
+            if(n==1&&group)groupSettingsDialog();
+            if(n==base+1){if(ChatService.isActive())throw new Exception(tr("استنى الرد يخلص.","Wait for the active reply."));JSONObject copy=thread();String id=Store.id();copy.put("id",id).put("title",copy.getString("title")+tr(" · نسخة"," · branch")).put("updated",System.currentTimeMillis());store.edit(x->x.getJSONArray("threads").put(copy));currentThread=id;draft="";attached="";show();}
+            if(n==base+2){StringBuilder text=new StringBuilder(thread().getString("title")+"\n\n");JSONArray rows=thread().getJSONArray("messages");for(int i=0;i<rows.length();i++){JSONObject m=rows.getJSONObject(i);text.append(m.optString("role")).append(":\n").append(plain(m.opt("content"))).append("\n\n");}exportText=text.toString();exportName="hermes-conversation.txt";startActivityForResult(new Intent(Intent.ACTION_CREATE_DOCUMENT).setType("text/plain").addCategory(Intent.CATEGORY_OPENABLE).putExtra(Intent.EXTRA_TITLE,exportName),42);}
+            if(n==base+3){exportText=markdownExport();exportName="hermes-conversation.md";startActivityForResult(new Intent(Intent.ACTION_CREATE_DOCUMENT).setType("text/markdown").addCategory(Intent.CATEGORY_OPENABLE).putExtra(Intent.EXTRA_TITLE,exportName),42);}
+            if(n==base+4){store.edit(x->Store.find(x.getJSONArray("threads"),currentThread).put("archived",true));Toast.makeText(this,tr("اتأرشفت — تلاقيها من الإعدادات","Archived — find it in Settings"),Toast.LENGTH_SHORT).show();page="bots";draft="";attached="";show();}
+            if(n==base+5){if(ChatService.isActive())throw new Exception(tr("استنى الرد يخلص.","Wait for the active reply."));new AlertDialog.Builder(this).setTitle(items[base+5]).setMessage(tr("هتتحذف المحادثة من التطبيق فقط.","This deletes the conversation from this app."))
                 .setNegativeButton(tr("رجوع","Back"),null).setPositiveButton(tr("حذف","Delete"),(a,b)->act(()->{store.edit(x->{JSONArray rows=x.getJSONArray("threads");for(int i=rows.length()-1;i>=0;i--)if(rows.getJSONObject(i).getString("id").equals(currentThread))rows.remove(i);});page="bots";draft="";attached="";show();})).show();}
-            if(n==4){
+            if(n==base+6){
                 JSONObject current=thread();JSONArray rows=store.read().getJSONArray("threads");ArrayList<JSONObject> related=new ArrayList<>();
                 for(int i=0;i<rows.length();i++){JSONObject r=rows.getJSONObject(i);if(Conversations.members(r).toString().equals(Conversations.members(current).toString()))related.add(r);}
                 related.sort((a,b)->Long.compare(b.optLong("updated"),a.optLong("updated")));String[] titles=new String[related.size()];for(int i=0;i<titles.length;i++)titles[i]=related.get(i).getString("title");
-                new AlertDialog.Builder(this).setTitle(items[4]).setItems(titles,(dialog,index)->act(()->{currentThread=related.get(index).getString("id");draft="";attached="";show();})).show();
+                new AlertDialog.Builder(this).setTitle(items[base+6]).setItems(titles,(dialog,index)->act(()->{currentThread=related.get(index).getString("id");draft="";attached="";show();})).show();
             }
-            if(n==5){JSONObject current=thread();if(Conversations.group(current)){currentThread=store.createGroup(Conversations.members(current),current.getString("title"));draft="";attached="";show();}else newThread(current.getString("botId"));}
-            if(n==6)relayDialog();
+            if(n==base+7){JSONObject current=thread();if(Conversations.group(current)){currentThread=store.createGroup(Conversations.members(current),current.getString("title"));draft="";attached="";show();}else newThread(current.getString("botId"));}
         })).show();
     }
-    private void relayDialog()throws Exception {
+    private String markdownExport()throws Exception {
+        JSONObject t=thread();StringBuilder text=new StringBuilder("# "+t.getString("title")+"\n");
+        if(!t.optString("description").isEmpty())text.append("\n_"+t.optString("description")+"_\n");
+        JSONArray rows=t.getJSONArray("messages");
+        for(int i=0;i<rows.length();i++){
+            JSONObject m=rows.getJSONObject(i);boolean user=m.optString("role").equals("user");
+            String who=user?tr("أنت","You"):Conversations.group(t)?m.optString("botName","Hermes"):t.optString("botName","Hermes");
+            text.append("\n## ").append(who);
+            if(m.optLong("ts",0)>0)text.append(" · ").append(DateFormat.getDateTimeInstance(DateFormat.SHORT,DateFormat.SHORT).format(new Date(m.optLong("ts"))));
+            text.append("\n\n").append(plain(m.opt("content"))).append("\n");
+        }
+        return text.toString();
+    }
+    private void groupSettingsDialog()throws Exception {
+        JSONObject t=thread();
         LinearLayout form=column();form.setPadding(dp(22),dp(12),dp(22),dp(12));
+        EditText name=field(form,tr("اسم الجروب","Group name"),t.getString("title"),false);
+        EditText purpose=field(form,tr("هدف الجروب","GROUP PURPOSE"),t.optString("description"),false);purpose.setSingleLine(false);purpose.setMinLines(2);purpose.setHint(tr("مثال: فريق مراجعة كود أسبوعي","e.g. weekly code review crew"));
         form.addView(label(tr("بعد الرسالة الجماعية (بدون @mention)، كل الأعضاء يردوا بالترتيب لجولات إضافية تحددها، وكل واحد بيشوف ردود اللي قبله. تقدر توقّف الحوار من الشات في أي وقت، ورسايل البوتات مش بتستدعي بعضها أبدًا.","After a broadcast message (no @mention), every member answers again in order for the extra rounds you set, each seeing the replies before it. You can stop the relay from the chat anytime; bot messages never trigger other bots."),13,MUTED));gap(form,14);
-        EditText rounds=field(form,tr("عدد الجولات الإضافية","Extra relay rounds"),String.valueOf(Relay.clamp(thread().optInt("relayRounds",0))),false);rounds.setHint("0–10");
-        new AlertDialog.Builder(this).setTitle(tr("الحوار التتابع بين البوتات","Bot relay discussion")).setView(form)
+        EditText rounds=field(form,tr("جولات الحوار التتابع","Relay discussion rounds"),String.valueOf(Relay.clamp(t.optInt("relayRounds",0))),false);rounds.setHint("0–10");
+        new AlertDialog.Builder(this).setTitle(tr("إعدادات الجروب","Group settings")).setView(form)
             .setNegativeButton(tr("رجوع","Cancel"),null)
-            .setPositiveButton(tr("حفظ","Save"),(a,b)->act(()->{store.edit(x->Store.find(x.getJSONArray("threads"),currentThread).put("relayRounds",Relay.parse(rounds.getText().toString())));show();})).show();
+            .setPositiveButton(tr("حفظ","Save"),(a,b)->act(()->{
+                String title=name.getText().toString().trim();if(title.isEmpty())return;
+                store.edit(x->{JSONObject target=Store.find(x.getJSONArray("threads"),currentThread);
+                    target.put("title",title).put("description",purpose.getText().toString().trim()).put("relayRounds",Relay.parse(rounds.getText().toString()));});
+                show();})).show();
     }
     private void pickImage(){startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT).setType("image/*").addCategory(Intent.CATEGORY_OPENABLE),41);}
     @Override protected void onActivityResult(int request,int result,Intent data){super.onActivityResult(request,result,data);if(result!=RESULT_OK||data==null||data.getData()==null)return;Uri uri=data.getData();
-        if(request==42)act(()->{if(exportText.isEmpty())throw new Exception("Export expired. Please start export again.");try(OutputStream out=getContentResolver().openOutputStream(uri)){if(out==null)throw new IOException("Could not open destination");out.write(exportText.getBytes(StandardCharsets.UTF_8));}Toast.makeText(this,tr("تم التصدير","Exported"),Toast.LENGTH_SHORT).show();});
-        if(request==43){new Thread(()->{try{
+        if(request==42)act(()->{if(exportText.isEmpty())throw new Exception("Export expired. Please start export again.");try(OutputStream out=getContentResolver().openOutputStream(uri)){if(out==null)throw new IOException("Could not open destination");out.write(exportText.getBytes(StandardCharsets.UTF_8));}Toast.makeText(this,tr("تم التصدير","Exported"),Toast.LENGTH_SHORT).show();});        if(request==43){new Thread(()->{try{
             byte[] bytes;try(InputStream in=getContentResolver().openInputStream(uri);ByteArrayOutputStream out=new ByteArrayOutputStream()){
                 if(in==null)throw new IOException("Cannot read photo");byte[] buf=new byte[8192];int n;while((n=in.read(buf))!=-1){out.write(buf,0,n);if(out.size()>5*1024*1024)throw new Exception("Photo limit is 5 MB");}bytes=out.toByteArray();
             }
