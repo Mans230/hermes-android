@@ -332,14 +332,30 @@ public final class MainActivity extends Activity {
         JSONObject b=bot(t.getString("botId"));LinearLayout form=column();form.setPadding(dp(22),dp(12),dp(22),dp(12));
         EditText model=field(form,"MODEL",b.optString("model","hermes-agent"),false);EditText provider=field(form,"PROVIDER",b.optString("provider",""),false);EditText effort=field(form,"REASONING EFFORT",b.optString("effort",""),false);
         AlertDialog d=new AlertDialog.Builder(this).setTitle(tr("تغيير الموديل للمحادثة القادمة","Switch model for next reply")).setView(form).setNegativeButton(tr("رجوع","Cancel"),null).setPositiveButton(tr("حفظ","Save"),null).create();
-        d.setOnShowListener(v->d.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(w->act(()->{String m=model.getText().toString().trim();if(m.isEmpty())throw new Exception("Enter a model");store.edit(x->Store.find(x.getJSONArray("bots"),b.getString("id")).put("model",m).put("provider",provider.getText().toString().trim()).put("effort",effort.getText().toString().trim()));d.dismiss();show();}));d.show();
+        d.setOnShowListener(v -> {
+            d.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(w -> act(() -> {
+                String m=model.getText().toString().trim();
+                if(m.isEmpty()) throw new Exception("Enter a model");
+                store.edit(x -> Store.find(x.getJSONArray("bots"),b.getString("id"))
+                    .put("model",m).put("provider",provider.getText().toString().trim()).put("effort",effort.getText().toString().trim()));
+                d.dismiss(); show();
+            }));
+        });
+        d.show();
     }
     private void compareModels()throws Exception {
         JSONObject t=thread();if(Conversations.group(t))throw new Exception(tr("المقارنة متاحة للمحادثات الفردية فقط.","Comparison is available for direct chats only."));
         String message=composer==null?"":composer.getText().toString().trim();if(message.isEmpty())throw new Exception(tr("اكتب رسالة للمقارنة أولًا.","Enter a message to compare first."));
         LinearLayout form=column();form.setPadding(dp(22),dp(12),dp(22),dp(12));EditText one=field(form,"MODEL A",bot(t.getString("botId")).optString("model","hermes-agent"),false);EditText two=field(form,"MODEL B","",false);
         AlertDialog d=new AlertDialog.Builder(this).setTitle(tr("مقارنة موديلين","Compare two models")).setView(form).setNegativeButton(tr("رجوع","Cancel"),null).setPositiveButton(tr("تشغيل المقارنة","Compare"),null).create();
-        d.setOnShowListener(v->d.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(w->act(()->{String a=one.getText().toString().trim(),b=two.getText().toString().trim();if(a.isEmpty()||b.isEmpty()||a.equals(b))throw new Exception("Enter two different models");sendComparison(message,a,b);d.dismiss();}));d.show();
+        d.setOnShowListener(v -> {
+            d.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(w -> act(() -> {
+                String a=one.getText().toString().trim(),b=two.getText().toString().trim();
+                if(a.isEmpty()||b.isEmpty()||a.equals(b)) throw new Exception("Enter two different models");
+                sendComparison(message,a,b); d.dismiss();
+            }));
+        });
+        d.show();
     }
     private void sendComparison(String message,String modelA,String modelB)throws Exception {
         if(ChatService.isActive())return;JSONObject t=thread();JSONObject bot=bot(t.getString("botId"));final String id=currentThread,turn=Store.id();if(!ChatService.reserve())return;
