@@ -48,18 +48,34 @@ public final class ChatService extends Service {
                         revision++;
                         JSONObject root=store.read();JSONObject current=Store.find(root.getJSONArray("threads"),activeThread);
                         JSONObject bot=Store.find(root.getJSONArray("bots"),item.getString("botId"));
-                        JSONObject result=HermesApi.stream(bot,current.getJSONArray("messages"),Conversations.group(current),new HermesApi.Stream(){
+                        JSONObject requestBot=new JSONObject(bot.toString());
+                        if(item.has("modelOverride"))requestBot.put("model",item.optString("modelOverride"));
+                        if(item.has("providerOverride"))requestBot.put("provider",item.optString("providerOverride"));
+                        if(item.has("effortOverride"))requestBot.put("effort",item.optString("effortOverride"));
+                        HermesApi.Stream streamListener=new HermesApi.Stream(){
                             public void delta(String value,String m){text=value;model=m;progress="";revision++;}
                             public void progress(String tool){
                                 if(tools.length()<100)tools.put(tool);
                                 activity=tools.toString();progress="Using "+tool+"…";revision++;
                             }
-                        });
+                        };
+                        JSONObject result;
+                        try {
+                            result=HermesApi.stream(requestBot,current.getJSONArray("messages"),Conversations.group(current),activeThread,streamListener);
+                        } catch(Exception first) {
+                            String fallback=item.optString("fallbackModel",bot.optString("fallbackModel"));
+                            if(fallback.isEmpty() || fallback.equals(requestBot.optString("model"))) throw first;
+                            requestBot.put("model",fallback).put("provider",item.optString("fallbackProvider",bot.optString("fallbackProvider")))
+                                .put("effort",item.optString("fallbackEffort",bot.optString("fallbackEffort")));
+                            progress="Retrying with fallback model…";revision++;
+                            result=HermesApi.stream(requestBot,current.getJSONArray("messages"),Conversations.group(current),activeThread,streamListener);
+                        }
+                        final JSONObject completed=result;
                         store.edit(d->{
                             JSONObject target=Store.find(d.getJSONArray("threads"),activeThread);
                             JSONObject reply=Conversations.reply(target.getJSONArray("messages"),id);
-                            reply.put("content",result.getString("content")).put("status","done")
-                                .put("model",result.optString("model")).put("usage",result.getJSONObject("usage")).put("tools",tools);
+                            reply.put("content",completed.getString("content")).put("status","done")
+                                .put("model",completed.optString("model")).put("usage",completed.getJSONObject("usage")).put("tools",tools);
                             target.put("updated",System.currentTimeMillis());
                         });
                     }catch(Exception e){
