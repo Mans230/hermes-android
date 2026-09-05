@@ -22,10 +22,10 @@ public final class MainActivity extends Activity {
     private static final int BG=0xff000000, CARD=0xff141414, LINE=0xff262626,
         WHITE=0xfff5f5f5, MUTED=0xff828282, ACCENT=0xffffffff, SECONDARY=0xffb0b0b0;
     private Store store;
-    private LinearLayout root, body, messageList;
+    private LinearLayout root, body, messageList, relayBar;
     private ScrollView chatScroll;
     private EditText composer;
-    private TextView attachmentLabel, sendButton;
+    private TextView attachmentLabel, sendButton, relayLabel;
     private String page="bots", currentThread="", visibleThread="", attached="", draft="", exportText="";
     private boolean arabic=false;
     private BotWizard openWizard;
@@ -83,7 +83,7 @@ public final class MainActivity extends Activity {
 
     private void show() throws Exception {
         markRead();
-        composer=null;messageList=null;
+        composer=null;messageList=null;relayBar=null;relayLabel=null;
         root=column();root.setBackgroundColor(BG);root.setLayoutDirection(arabic?View.LAYOUT_DIRECTION_RTL:View.LAYOUT_DIRECTION_LTR);
         root.setOnApplyWindowInsetsListener((v,insets)->{
             if(Build.VERSION.SDK_INT>=30){Insets bars=insets.getInsets(WindowInsets.Type.systemBars()|WindowInsets.Type.ime());v.setPadding(bars.left,bars.top,bars.right,bars.bottom);}
@@ -148,15 +148,19 @@ public final class MainActivity extends Activity {
     private void newGroup()throws Exception {
         JSONArray bots=store.read().getJSONArray("bots");if(bots.length()<2){alert(tr("جروب جديد","New group"),tr("أضف بوتين على الأقل الأول.","Connect at least two bots first."));return;}
         LinearLayout form=column();form.setPadding(dp(22),dp(12),dp(22),dp(12));EditText title=field(form,tr("اسم الجروب","Group name"),"",false);
+        EditText rounds=field(form,tr("جولات حوار تلقائي بعد الرسالة (اختياري)","Auto relay rounds after your message (optional)"),"0",false);rounds.setHint("0–10");
         ArrayList<CheckBox> boxes=new ArrayList<>();
         for(int i=0;i<bots.length();i++){JSONObject b=bots.getJSONObject(i);CheckBox box=new CheckBox(this);box.setText(b.optString("avatar","🤖")+"  "+b.getString("name")+"  @"+Conversations.handle(b));box.setTextColor(WHITE);form.addView(box);boxes.add(box);}
-        gap(form,14);form.addView(label(tr("الرسالة بدون @mention تتبعت لكل الأعضاء بالترتيب. كل عضو هيشوف سياق الجروب.","Without an @mention, every member replies in order. Group conversation context is shared with each recipient."),13,MUTED));
+        gap(form,14);form.addView(label(tr("الرسالة بدون @mention تتبعت لكل الأعضاء بالترتيب. كل عضو هيشوف سياق الجروب.\n\nجولات الحوار: بعد ما يرد كل الأعضاء، يردوا تاني بالترتيب للعدد اللي حددته. انت اللي بتوقّف الحوار في أي وقت، ورسايل البوتات مش بتستدعي بعضها أبدًا.","Without an @mention, every member replies in order. Group conversation context is shared with each recipient.\n\nRelay rounds: after every member replies, they answer again in order for the rounds you set. You can stop the relay anytime; bot messages never trigger other bots."),13,MUTED));
         ScrollView scroll=new ScrollView(this);scroll.addView(form);
         AlertDialog dialog=new AlertDialog.Builder(this).setTitle(tr("جروب جديد","New group")).setView(scroll).setNegativeButton(tr("رجوع","Cancel"),null).setPositiveButton(tr("إنشاء","Create"),null).create();
         dialog.setOnShowListener(v->dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(w->act(()->{
             JSONArray ids=new JSONArray();for(int i=0;i<boxes.size();i++)if(boxes.get(i).isChecked())ids.put(bots.getJSONObject(i).getString("id"));
             String name=title.getText().toString().trim();if(name.isEmpty())throw new Exception(tr("اكتب اسم الجروب.","Enter a group name."));
-            currentThread=store.createGroup(ids,name);page="chat";draft="";attached="";dialog.dismiss();show();
+            int relay=Relay.parse(rounds.getText().toString());
+            currentThread=store.createGroup(ids,name);page="chat";draft="";attached="";
+            if(relay>0)store.edit(d->Store.find(d.getJSONArray("threads"),currentThread).put("relayRounds",relay));
+            dialog.dismiss();show();
         })));dialog.show();
     }
 
@@ -184,7 +188,7 @@ public final class MainActivity extends Activity {
             if(Build.VERSION.SDK_INT>=33&&checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED)requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS},9);
             else startActivity(new Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(android.provider.Settings.EXTRA_APP_PACKAGE,getPackageName()));
         }));gap(body,24);
-        body.addView(label(tr("الضغط المطوّل على البوت يفتح إعداداته.\n\nالمحادثات والمفاتيح مشفّرة على الجهاز. سجل Telegram مستقل. الإشعارات للردود التي تبدأها هنا فقط.\n\nإعداد الشخصية يخص محادثات التطبيق؛ لا يغيّر SOUL.md على السيرفر.","Long-press a bot to edit its identity and connection.\n\nChats and keys are encrypted on this device. Telegram history is separate. Notifications cover replies started here.\n\nPersonality applies to app requests; it does not modify server SOUL.md."),14,MUTED));gap(body,32);body.addView(label("Hermes · Android client 0.2.0",12,MUTED));
+        body.addView(label(tr("الضغط المطوّل على البوت يفتح إعداداته.\n\nالمحادثات والمفاتيح مشفّرة على الجهاز. سجل Telegram مستقل. الإشعارات للردود التي تبدأها هنا فقط.\n\nإعداد الشخصية يخص محادثات التطبيق؛ لا يغيّر SOUL.md على السيرفر.","Long-press a bot to edit its identity and connection.\n\nChats and keys are encrypted on this device. Telegram history is separate. Notifications cover replies started here.\n\nPersonality applies to app requests; it does not modify server SOUL.md."),14,MUTED));gap(body,32);body.addView(label("Hermes · Android client 0.3.0",12,MUTED));
     }
     private void editServer()throws Exception {
         JSONObject current=store.read().optJSONObject("server");LinearLayout form=column();form.setPadding(dp(22),dp(16),dp(22),dp(16));
@@ -208,11 +212,17 @@ public final class MainActivity extends Activity {
         LinearLayout h=row();h.setPadding(dp(8),dp(8),dp(12),dp(8));h.addView(back(()->{page="bots";draft="";attached="";show();}));
         h.addView(avatar(b,32),new LinearLayout.LayoutParams(dp(32),dp(32)));
         LinearLayout names=column();names.setPadding(dp(10),0,dp(10),0);TextView title=label(group?t.getString("title"):b.getString("name"),16,WHITE);title.setTypeface(null,Typeface.BOLD);title.setMaxLines(1);title.setEllipsize(TextUtils.TruncateAt.END);names.addView(title);
-        String sub=group?Conversations.members(t).length()+tr(" أعضاء"," members"):(b.optString("model","hermes-agent").equals("hermes-agent")?tr("موديل Hermes الافتراضي","Hermes default"):b.optString("model"));names.addView(label(sub,11,MUTED));
+        int rounds=Relay.clamp(t.optInt("relayRounds",0));
+        String sub=group?Conversations.members(t).length()+tr(" أعضاء"," members")+(rounds>0?" · ⟳"+rounds:""):(b.optString("model","hermes-agent").equals("hermes-agent")?tr("موديل Hermes الافتراضي","Hermes default"):b.optString("model"));names.addView(label(sub,11,MUTED));
         names.setOnClickListener(v->act(()->{if(group)showMembers();else editBot(b);}));h.addView(names,new LinearLayout.LayoutParams(0,-2,1));
         TextView menu=label("⋯",22,MUTED);menu.setGravity(Gravity.CENTER);menu.setOnClickListener(v->act(()->chatMenu()));h.addView(menu,new LinearLayout.LayoutParams(dp(36),dp(44)));root.addView(h);
         chatScroll=new ScrollView(this);chatScroll.setFillViewport(true);messageList=column();messageList.setGravity(Gravity.BOTTOM);messageList.setPadding(dp(20),dp(18),dp(20),dp(14));chatScroll.addView(messageList);root.addView(chatScroll,new LinearLayout.LayoutParams(-1,0,1));
         LinearLayout input=column();input.setPadding(dp(16),dp(6),dp(16),dp(12));attachmentLabel=label("",12,MUTED);attachmentLabel.setPadding(dp(8),dp(3),dp(8),dp(6));attachmentLabel.setOnClickListener(v->{attached="";updateAttachment();});input.addView(attachmentLabel);
+        relayBar=row();relayBar.setPadding(dp(14),dp(9),dp(14),dp(9));relayBar.setBackground(shape(0xff141414,LINE,14));relayBar.setVisibility(View.GONE);
+        relayLabel=label("",13,WHITE);relayLabel.setLayoutParams(new LinearLayout.LayoutParams(0,-2,1));relayBar.addView(relayLabel);
+        TextView stopRelay=label(tr("إيقاف الحوار","Stop relay"),13,0xffed7171);stopRelay.setTypeface(null,Typeface.BOLD);
+        stopRelay.setOnClickListener(v->{ChatService.requestRelayStop();act(()->renderMessages());});relayBar.addView(stopRelay);
+        gap(input,8);input.addView(relayBar);gap(input,6);
         LinearLayout bar=row();bar.setPadding(dp(4),dp(3),dp(4),dp(3));bar.setBackground(shape(0xff0c0c0c,LINE,28));
         TextView add=label("+",23,MUTED);add.setGravity(Gravity.CENTER);add.setOnClickListener(v->pickImage());add.setContentDescription(tr("إرفاق صورة","Attach image"));bar.addView(add,new LinearLayout.LayoutParams(dp(38),dp(44)));
         composer=new EditText(this);composer.setTextColor(WHITE);composer.setHintTextColor(MUTED);composer.setTextSize(15);composer.setBackgroundColor(Color.TRANSPARENT);composer.setMaxLines(5);composer.setMinLines(1);
@@ -266,7 +276,14 @@ public final class MainActivity extends Activity {
             }
         }
         sendButton.setEnabled(!ChatService.isActive());sendButton.setAlpha(ChatService.isActive()?.3f:1f);
+        updateRelay();
         if(atBottom||messages.length()<=2)chatScroll.post(()->chatScroll.fullScroll(View.FOCUS_DOWN));else chatScroll.post(()->chatScroll.scrollTo(0,oldY));
+    }
+    private void updateRelay()throws Exception {
+        if(relayBar==null)return;
+        boolean active=ChatService.relayTotal>0&&currentThread.equals(ChatService.threadId)&&Conversations.group(thread());
+        relayBar.setVisibility(active?View.VISIBLE:View.GONE);
+        if(active)relayLabel.setText("⟳ "+tr("جولة حوار ","Discussion round ")+ChatService.relayRound+"/"+ChatService.relayTotal+(ChatService.relayStop?" · "+tr("بيقف بعد الرد الحالي…","stopping after this reply…"):""));
     }
 
     private CharSequence markdown(String input){
@@ -302,7 +319,11 @@ public final class MainActivity extends Activity {
     }
 
     private void chatMenu()throws Exception {
-        String[] items={tr("تغيير الاسم","Rename"),tr("نسخة من المحادثة","Branch conversation"),tr("تصدير نص المحادثة","Export conversation text"),tr("حذف من الموبايل","Delete from device"),tr("سجل المحادثات","Conversation history"),tr("محادثة جديدة","New conversation")};
+        boolean group=Conversations.group(thread());
+        java.util.List<String> choices=new ArrayList<>(java.util.Arrays.asList(
+            tr("تغيير الاسم","Rename"),tr("نسخة من المحادثة","Branch conversation"),tr("تصدير نص المحادثة","Export conversation text"),tr("حذف من الموبايل","Delete from device"),tr("سجل المحادثات","Conversation history"),tr("محادثة جديدة","New conversation")));
+        if(group)choices.add(tr("جولات الحوار التتابع","Relay discussion rounds"));
+        String[] items=choices.toArray(new String[0]);
         new AlertDialog.Builder(this).setItems(items,(d,n)->act(()->{
             if(n==0){EditText name=new EditText(this);name.setText(thread().getString("title"));new AlertDialog.Builder(this).setTitle(items[0]).setView(name).setNegativeButton(tr("رجوع","Back"),null).setPositiveButton(tr("حفظ","Save"),(a,b)->act(()->{String title=name.getText().toString().trim();if(title.isEmpty())return;store.edit(x->Store.find(x.getJSONArray("threads"),currentThread).put("title",title));draft=composer.getText().toString();show();})).show();}
             if(n==1){if(ChatService.isActive())throw new Exception(tr("استنى الرد يخلص.","Wait for the active reply."));JSONObject copy=thread();String id=Store.id();copy.put("id",id).put("title",copy.getString("title")+tr(" · نسخة"," · branch")).put("updated",System.currentTimeMillis());store.edit(x->x.getJSONArray("threads").put(copy));currentThread=id;draft="";attached="";show();}
@@ -316,7 +337,16 @@ public final class MainActivity extends Activity {
                 new AlertDialog.Builder(this).setTitle(items[4]).setItems(titles,(dialog,index)->act(()->{currentThread=related.get(index).getString("id");draft="";attached="";show();})).show();
             }
             if(n==5){JSONObject current=thread();if(Conversations.group(current)){currentThread=store.createGroup(Conversations.members(current),current.getString("title"));draft="";attached="";show();}else newThread(current.getString("botId"));}
+            if(n==6)relayDialog();
         })).show();
+    }
+    private void relayDialog()throws Exception {
+        LinearLayout form=column();form.setPadding(dp(22),dp(12),dp(22),dp(12));
+        form.addView(label(tr("بعد الرسالة الجماعية (بدون @mention)، كل الأعضاء يردوا بالترتيب لجولات إضافية تحددها، وكل واحد بيشوف ردود اللي قبله. تقدر توقّف الحوار من الشات في أي وقت، ورسايل البوتات مش بتستدعي بعضها أبدًا.","After a broadcast message (no @mention), every member answers again in order for the extra rounds you set, each seeing the replies before it. You can stop the relay from the chat anytime; bot messages never trigger other bots."),13,MUTED));gap(form,14);
+        EditText rounds=field(form,tr("عدد الجولات الإضافية","Extra relay rounds"),String.valueOf(Relay.clamp(thread().optInt("relayRounds",0))),false);rounds.setHint("0–10");
+        new AlertDialog.Builder(this).setTitle(tr("الحوار التتابع بين البوتات","Bot relay discussion")).setView(form)
+            .setNegativeButton(tr("رجوع","Cancel"),null)
+            .setPositiveButton(tr("حفظ","Save"),(a,b)->act(()->{store.edit(x->Store.find(x.getJSONArray("threads"),currentThread).put("relayRounds",Relay.parse(rounds.getText().toString())));show();})).show();
     }
     private void pickImage(){startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT).setType("image/*").addCategory(Intent.CATEGORY_OPENABLE),41);}
     @Override protected void onActivityResult(int request,int result,Intent data){super.onActivityResult(request,result,data);if(result!=RESULT_OK||data==null||data.getData()==null)return;Uri uri=data.getData();
