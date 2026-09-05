@@ -254,7 +254,7 @@ public final class MainActivity extends Activity {
         }));gap(body,14);
         body.addView(button(fontLabel(),false,()->{float s=chatScale();store.edit(d->d.put("chatScale",s>1.05?0.85:s<0.95?1.0:1.15));show();}));gap(body,14);
         body.addView(button(tr("إظهار المحادثات المؤرشفة: ","Show archived conversations: ")+(store.read().optBoolean("showArchived",false)?tr("نعم","Yes"):tr("لا","No")),false,()->{store.edit(d->d.put("showArchived",!d.optBoolean("showArchived",false)));show();}));gap(body,24);
-        body.addView(label(tr("الضغط المطوّل على البوت يفتح قائمته (تعديل، تثبيت، نسخة). الضغط المطوّل على رسالتك يتيح تعديلها وإعادة إرسالها.\n\nالمحادثات والمفاتيح مشفّرة على الجهاز. الإشعارات للردود التي تبدأها هنا فقط.\n\nإعداد الشخصية يخص محادثات التطبيق؛ لا يغيّر SOUL.md على السيرفر.","Long-press a bot for its menu (edit, pin, duplicate). Long-press your own message to edit and resend it.\n\nChats and keys are encrypted on this device. Notifications cover replies started here.\n\nPersonality applies to app requests; it does not modify server SOUL.md."),14,MUTED));gap(body,32);body.addView(label("Hermes · Android client 0.4.0",12,MUTED));
+        body.addView(label(tr("الضغط المطوّل على البوت يفتح قائمته (تعديل، تثبيت، نسخة). الضغط المطوّل على رسالتك يتيح تعديلها وإعادة إرسالها.\n\nالمحادثات والمفاتيح مشفّرة على الجهاز. الإشعارات للردود التي تبدأها هنا فقط.\n\nإعداد الشخصية يخص محادثات التطبيق؛ لا يغيّر SOUL.md على السيرفر.","Long-press a bot for its menu (edit, pin, duplicate). Long-press your own message to edit and resend it.\n\nChats and keys are encrypted on this device. Notifications cover replies started here.\n\nPersonality applies to app requests; it does not modify server SOUL.md."),14,MUTED));gap(body,32);body.addView(label("Hermes · Android client 0.5.0",12,MUTED));
     }
     private String fontLabel()throws Exception {
         float s=chatScale();
@@ -297,6 +297,13 @@ public final class MainActivity extends Activity {
         TextView add=label("+",23,MUTED);add.setGravity(Gravity.CENTER);add.setOnClickListener(v->pickImage());add.setContentDescription(tr("إرفاق صورة","Attach image"));bar.addView(add,new LinearLayout.LayoutParams(dp(38),dp(44)));
         composer=new EditText(this);composer.setTextColor(WHITE);composer.setHintTextColor(MUTED);composer.setTextSize(15);composer.setBackgroundColor(Color.TRANSPARENT);composer.setMaxLines(5);composer.setMinLines(1);
         composer.setHint(group?tr("رسالة أو @mention…","Message or @mention…"):tr("رسالة إلى ","Message ")+b.getString("name"));composer.setInputType(android.text.InputType.TYPE_CLASS_TEXT|android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE|android.text.InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);composer.setText(draft);composer.setPadding(dp(3),dp(6),dp(5),dp(6));bar.addView(composer,new LinearLayout.LayoutParams(0,-2,1));
+        TextView mic=label("🎤",15,WHITE);mic.setGravity(Gravity.CENTER);mic.setContentDescription(tr("إدخال صوتي","Voice input"));
+        mic.setOnClickListener(v->{try{startActivityForResult(new Intent(android.speech.RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
+            .putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE_MODEL,android.speech.RecognizerIntent.EXTRA_LANGUAGE_MODEL_FREE_FORM)
+            .putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE,arabic?"ar-EG":"en-US")
+            .putExtra(android.speech.RecognizerIntent.EXTRA_PROMPT,tr("اتكلم دلوقتي…","Speak now…")),45);}
+            catch(Exception e){alert(tr("الإدخال الصوتي غير متاح","Voice input unavailable"),tr("الخدمة دي مش متاحة على جهازك.","Speech recognition is not available on this device."));}});
+        bar.addView(mic,new LinearLayout.LayoutParams(dp(36),dp(44)));
         sendButton=label("↑",24,BG);sendButton.setGravity(Gravity.CENTER);sendButton.setBackground(shape(WHITE,0,24));sendButton.setContentDescription(tr("إرسال","Send"));sendButton.setOnClickListener(v->act(()->send(false)));LinearLayout.LayoutParams send=new LinearLayout.LayoutParams(dp(34),dp(34));send.setMargins(dp(5),0,dp(4),0);bar.addView(sendButton,send);input.addView(bar);root.addView(input);updateAttachment();renderMessages();
     }
     private void showMembers()throws Exception {
@@ -325,19 +332,45 @@ public final class MainActivity extends Activity {
                 LinearLayout by=row();JSONObject identity=new JSONObject().put("avatar",m.optString("avatar","🤖")).put("photo",m.optString("photo"));by.addView(avatar(identity,18),new LinearLayout.LayoutParams(dp(18),dp(18)));TextView name=label(m.optString("botName","Hermes"),11,MUTED);name.setPadding(dp(6),0,dp(6),0);by.addView(name);outer.addView(by);gap(outer,9);
             }
             boolean active=pending&&currentThread.equals(ChatService.threadId)&&m.optString("id").equals(ChatService.replyId);
-            String value=active?ChatService.text:plain(m.opt("content"));
             float scale=chatScale();
-            if(!value.isEmpty()){
-                TextView content=label("",16*scale,user?BG:WHITE);content.setLineSpacing(dp(3),1);content.setTextIsSelectable(true);content.setTextDirection(View.TEXT_DIRECTION_FIRST_STRONG);content.setText(markdown(value));
-                LinearLayout.LayoutParams cp=new LinearLayout.LayoutParams(user?-2:-1,-2);cp.gravity=Gravity.END;
-                if(user){content.setMaxWidth(getResources().getDisplayMetrics().widthPixels-dp(85));content.setPadding(dp(14),dp(10),dp(14),dp(10));content.setBackground(shape(WHITE,0,21));}
-                if(user&&!pending&&!m.optString("status").equals("error"))content.setOnLongClickListener(v->{act(()->resendDialog(m));return true;});
+            ArrayList<String> images=new ArrayList<>();
+            Object rawContent=m.opt("content");
+            String value;
+            if(!active&&rawContent instanceof JSONArray){
+                JSONArray parts=(JSONArray)rawContent;StringBuilder partsText=new StringBuilder();
+                for(int i=0;i<parts.length();i++){JSONObject p=parts.getJSONObject(i);
+                    if(p.optString("type").equals("text"))partsText.append(p.optString("text"));
+                    else if(p.optString("type").equals("image_url")&&p.optJSONObject("image_url")!=null)images.add(p.optJSONObject("image_url").optString("url"));}
+                value=partsText.toString();
+            }else value=active?ChatService.text:plain(rawContent);
+            LinearLayout.LayoutParams cp=new LinearLayout.LayoutParams(user?-2:-1,-2);cp.gravity=Gravity.END;
+            if(user){
+                if(!images.isEmpty()||!value.isEmpty()){
+                    LinearLayout bubble=column();bubble.setBackground(shape(WHITE,0,21));bubble.setPadding(dp(8),dp(8),dp(8),dp(8));
+                    for(String url:images){Bitmap bmp=decodeImage(url);if(bmp==null)continue;
+                        ImageView iv=new ImageView(this);iv.setImageBitmap(bmp);iv.setScaleType(ImageView.ScaleType.FIT_CENTER);iv.setAdjustViewBounds(true);
+                        iv.setLayoutParams(new LinearLayout.LayoutParams(dp(220),Math.min(dp(340),(int)(dp(220)*(float)bmp.getHeight()/bmp.getWidth()))));
+                        iv.setClipToOutline(true);iv.setBackground(shape(0xffdddddd,0,14));
+                        final Bitmap full=bmp;iv.setOnClickListener(v->showImage(full));bubble.addView(iv);gap(bubble,6);}
+                    if(!value.isEmpty()){TextView txt=label("",16*scale,BG);txt.setLineSpacing(dp(3),1);txt.setTextDirection(View.TEXT_DIRECTION_FIRST_STRONG);txt.setText(markdown(value,0xff1565c0));bubble.addView(txt);}
+                    if(!pending&&!m.optString("status").equals("error"))bubble.setOnLongClickListener(v->{act(()->resendDialog(m));return true;});
+                    outer.addView(bubble,cp);
+                }
+            }else if(!value.isEmpty()){
+                TextView content=label("",16*scale,WHITE);content.setLineSpacing(dp(3),1);content.setTextIsSelectable(true);content.setTextDirection(View.TEXT_DIRECTION_FIRST_STRONG);content.setText(markdown(value,0xff8ec9ff));
                 outer.addView(content,cp);
             }
             if(!pending&&m.optLong("ts",0)>0){
                 TextView time=label(DateFormat.getTimeInstance(DateFormat.SHORT).format(new Date(m.optLong("ts"))),10*scale,MUTED);
                 LinearLayout.LayoutParams tp=new LinearLayout.LayoutParams(-2,-2);if(user)tp.gravity=Gravity.END;
                 gap(outer,4);outer.addView(time,tp);
+            }
+            String thinking=active?ChatService.reasoning:m.optString("thinking","");
+            if(!thinking.isEmpty()){
+                gap(outer,8);TextView th=label("💭  "+tr("خطوات التفكير","Thinking steps")+(active?" …":"  ·  "+tr("اضغط للعرض","tap to view")),12,MUTED);
+                th.setMinHeight(dp(36));th.setGravity(Gravity.CENTER_VERTICAL);
+                final String detail=thinking;
+                th.setOnClickListener(v->alert(tr("البوت كان بيفكر في إيه؟","What was the bot thinking?"),detail));outer.addView(th);
             }
             JSONArray tools=active?new JSONArray(ChatService.activity):m.optJSONArray("tools");
             if(tools!=null&&tools.length()>0){
@@ -377,14 +410,51 @@ public final class MainActivity extends Activity {
             })).show();
     }
 
-    private CharSequence markdown(String input){
+    private CharSequence markdown(String input,int mentionColor){
         SpannableStringBuilder out=new SpannableStringBuilder();String[] pieces=input.split("```",-1);
+        java.util.regex.Pattern mention=java.util.regex.Pattern.compile("(?<![\\p{L}\\p{N}_@])@[a-zA-Z0-9_-]+");
         for(int i=0;i<pieces.length;i++){
             String value=pieces[i];if(i%2==1){int newline=value.indexOf('\n');if(newline>=0 && newline<25)value=value.substring(newline+1);}
-            int start=out.length();out.append(value);
-            if(i%2==1){out.setSpan(new TypefaceSpan("monospace"),start,out.length(),Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);out.setSpan(new BackgroundColorSpan(0xff242424),start,out.length(),Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);out.setSpan(new RelativeSizeSpan(.88f),start,out.length(),Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);}
+            if(i%2==0){
+                java.util.regex.Matcher mm=mention.matcher(value);int last=0;
+                while(mm.find()){
+                    out.append(value,last,mm.start());
+                    int st=out.length();out.append(value,mm.start(),mm.end());
+                    out.setSpan(new ForegroundColorSpan(mentionColor),st,out.length(),Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                    out.setSpan(new StyleSpan(Typeface.BOLD),st,out.length(),Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                    last=mm.end();
+                }
+                out.append(value,last,value.length());
+            }else{
+                int start=out.length();out.append(value);
+                out.setSpan(new TypefaceSpan("monospace"),start,out.length(),Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);out.setSpan(new BackgroundColorSpan(0xff242424),start,out.length(),Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);out.setSpan(new RelativeSizeSpan(.88f),start,out.length(),Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            }
         }
         return out;
+    }
+    private static final java.util.HashMap<String,Bitmap> imageCache=new java.util.HashMap<>();
+    private Bitmap decodeImage(String url){
+        if(url==null||url.isEmpty())return null;
+        String key=url.length()+"_"+url.hashCode();
+        Bitmap hit=imageCache.get(key);if(hit!=null)return hit;
+        try{
+            int comma=url.indexOf(',');if(comma<0)return null;
+            byte[] bytes=android.util.Base64.decode(url.substring(comma+1),android.util.Base64.DEFAULT);
+            BitmapFactory.Options bounds=new BitmapFactory.Options();bounds.inJustDecodeBounds=true;BitmapFactory.decodeByteArray(bytes,0,bounds);
+            if(bounds.outWidth<=0||bounds.outHeight<=0)return null;
+            BitmapFactory.Options opts=new BitmapFactory.Options();opts.inSampleSize=Math.max(1,Math.max(bounds.outWidth,bounds.outHeight)/512);
+            Bitmap bmp=BitmapFactory.decodeByteArray(bytes,0,opts);
+            if(bmp!=null){if(imageCache.size()>10)imageCache.clear();imageCache.put(key,bmp);}
+            return bmp;
+        }catch(Exception e){return null;}
+    }
+    private void showImage(Bitmap bmp){
+        Dialog d=new Dialog(this,R.style.AppTheme);
+        ImageView iv=new ImageView(this);iv.setImageBitmap(bmp);iv.setBackgroundColor(BG);iv.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        iv.setContentDescription(tr("عرض الصورة — اضغط للإغلاق","Image view — tap to close"));
+        iv.setOnClickListener(v->d.dismiss());d.setContentView(iv);
+        d.getWindow().setLayout(-1,-1);if(Build.VERSION.SDK_INT>=30)d.getWindow().setDecorFitsSystemWindows(false);
+        d.show();
     }
     private void send(boolean retry)throws Exception {sendTo(null);}
     private void sendTo(String retryBot)throws Exception {
@@ -465,7 +535,10 @@ public final class MainActivity extends Activity {
     }
     private void pickImage(){startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT).setType("image/*").addCategory(Intent.CATEGORY_OPENABLE),41);}
     @Override protected void onActivityResult(int request,int result,Intent data){super.onActivityResult(request,result,data);if(result!=RESULT_OK||data==null||data.getData()==null)return;Uri uri=data.getData();
-        if(request==42)act(()->{if(exportText.isEmpty())throw new Exception("Export expired. Please start export again.");try(OutputStream out=getContentResolver().openOutputStream(uri)){if(out==null)throw new IOException("Could not open destination");out.write(exportText.getBytes(StandardCharsets.UTF_8));}Toast.makeText(this,tr("تم التصدير","Exported"),Toast.LENGTH_SHORT).show();});        if(request==43){new Thread(()->{try{
+        if(request==42)act(()->{if(exportText.isEmpty())throw new Exception("Export expired. Please start export again.");try(OutputStream out=getContentResolver().openOutputStream(uri)){if(out==null)throw new IOException("Could not open destination");out.write(exportText.getBytes(StandardCharsets.UTF_8));}Toast.makeText(this,tr("تم التصدير","Exported"),Toast.LENGTH_SHORT).show();});        if(request==45){java.util.ArrayList<String> heard=data.getStringArrayListExtra(android.speech.RecognizerIntent.EXTRA_RESULTS);
+            if(heard!=null&&!heard.isEmpty()&&composer!=null){String said=heard.get(0);String cur=composer.getText().toString();
+                composer.setText(cur.isEmpty()?said:cur+" "+said);composer.setSelection(composer.getText().length());}}
+        if(request==43){new Thread(()->{try{
             byte[] bytes;try(InputStream in=getContentResolver().openInputStream(uri);ByteArrayOutputStream out=new ByteArrayOutputStream()){
                 if(in==null)throw new IOException("Cannot read photo");byte[] buf=new byte[8192];int n;while((n=in.read(buf))!=-1){out.write(buf,0,n);if(out.size()>5*1024*1024)throw new Exception("Photo limit is 5 MB");}bytes=out.toByteArray();
             }

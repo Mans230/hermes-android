@@ -19,7 +19,7 @@ public final class ChatService extends Service {
     public static synchronized boolean reserve(){if(busy||reserved)return false;reserved=true;return true;}
     public static synchronized void releaseReservation(){reserved=false;}
     public static boolean isActive(){return busy||reserved;}
-    public static volatile String threadId="", replyId="", text="", model="", progress="", activity="[]";
+    public static volatile String threadId="", replyId="", text="", model="", progress="", activity="[]", reasoning="";
     public static volatile int relayRound=0, relayTotal=0;
     public static volatile boolean relayStop=false;
     public static void requestRelayStop(){relayStop=true;}
@@ -90,7 +90,7 @@ public final class ChatService extends Service {
             JSONObject item=planned.getJSONObject(i);
             if(!item.optString("turn").equals(turn)||!item.optString("status").equals("queued"))continue;
             if(stoppable&&relayStop){stopRelayTurn(store,activeThread,turn);return false;}
-            final String id=item.getString("id");replyId=id;text="";model="";activity="[]";progress="Thinking…";revision++;
+            final String id=item.getString("id");replyId=id;text="";model="";activity="[]";progress="Thinking…";reasoning="";revision++;
             JSONArray tools=new JSONArray();
             try{
                 store.edit(d->Conversations.reply(Store.find(d.getJSONArray("threads"),activeThread).getJSONArray("messages"),id).put("status","pending"));
@@ -103,6 +103,7 @@ public final class ChatService extends Service {
                         if(tools.length()<100)tools.put(tool);
                         activity=tools.toString();progress="Using "+tool+"…";revision++;
                     }
+                    public void reasoning(String value){reasoning=value;revision++;}
                 });
                 store.edit(d->{
                     JSONObject target=Store.find(d.getJSONArray("threads"),activeThread);
@@ -110,6 +111,7 @@ public final class ChatService extends Service {
                             reply.put("content",result.getString("content")).put("status","done")
                                 .put("ts",System.currentTimeMillis())
                                 .put("model",result.optString("model")).put("usage",result.getJSONObject("usage")).put("tools",tools);
+                            if(result.optString("thinking").length()>0)reply.put("thinking",result.optString("thinking"));
                     target.put("updated",System.currentTimeMillis());
                 });
             }catch(Exception e){

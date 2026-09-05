@@ -10,7 +10,7 @@ import java.nio.charset.StandardCharsets;
 
 /** Direct public Hermes API; never talks to Telegram or an LLM provider directly. */
 public final class HermesApi {
-    public interface Stream { void delta(String text, String model); void progress(String message); }
+    public interface Stream { void delta(String text, String model); void progress(String message); void reasoning(String value); }
     public static HttpsURLConnection open(JSONObject bot, String path, String method) throws Exception {
         URL url = new URL(Endpoint.normalize(bot.getString("url")) + path);
         HttpsURLConnection c = (HttpsURLConnection)url.openConnection();
@@ -67,7 +67,7 @@ public final class HermesApi {
         c.setRequestProperty("Content-Type","application/json; charset=utf-8");
         c.setDoOutput(true);
         byte[] bytes=request.toString().getBytes(StandardCharsets.UTF_8);c.setFixedLengthStreamingMode(bytes.length);
-        StringBuilder output = new StringBuilder(); String[] model={""}; boolean[] done={false};
+        StringBuilder output = new StringBuilder(); StringBuilder think = new StringBuilder(); String[] model={""}; boolean[] done={false};
         JSONObject[] usage={new JSONObject()};
         java.util.Timer deadline=new java.util.Timer(true);
         deadline.schedule(new java.util.TimerTask(){public void run(){c.disconnect();}},30*60*1000L);
@@ -85,6 +85,14 @@ public final class HermesApi {
                     if(!tool.matches("[A-Za-z0-9_.:-]{1,80}"))tool="tool";
                     listener.progress(tool);return true;
                 }
+                String lower=type.toLowerCase(java.util.Locale.ROOT);
+                if(lower.contains("reason")||lower.contains("think")){
+                    try{JSONObject e=new JSONObject(text);
+                        String piece=e.optString("delta",e.optString("text",e.optString("content",e.optString("thinking",""))));
+                        if(!piece.isEmpty()){think.append(piece);listener.reasoning(think.toString());}
+                    }catch(Exception ignored){}
+                    return true;
+                }
                 JSONObject event=new JSONObject(text);
                 if(type.equals("error") || event.has("error"))throw new IOException("Hermes reported an error. Check server logs.");
                 if(event.has("model"))model[0]=event.optString("model");
@@ -92,17 +100,22 @@ public final class HermesApi {
                 JSONArray choices=event.optJSONArray("choices");
                 if(choices!=null && choices.length()>0){
                     JSONObject delta=choices.getJSONObject(0).optJSONObject("delta");
-                    if(delta!=null && delta.opt("content") instanceof String){
-                        output.append(delta.getString("content"));
-                        if(output.length()>2_000_000)throw new IOException("Response exceeded the app limit");
-                        listener.delta(output.toString(),model[0]);
+                    if(delta!=null){
+                        String r=delta.optString("reasoning_content",delta.optString("reasoning",""));
+                        if(!r.isEmpty()){think.append(r);listener.reasoning(think.toString());}
+                        if(delta.opt("content") instanceof String){
+                            output.append(delta.getString("content"));
+                            if(output.length()>2_000_000)throw new IOException("Response exceeded the app limit");
+                            listener.delta(output.toString(),model[0]);
+                        }
                     }
                 }
                 return true;
             });
             if(!done[0])throw new IOException("Connection ended before completion. Check the bot before retrying.");
             if(output.length()==0)throw new IOException("Hermes returned no visible text. Check the bot before retrying.");
-            return new JSONObject().put("content",output.toString()).put("model",model[0]).put("usage",usage[0]);
+            return new JSONObject().put("content",output.toString()).put("model",model[0]).put("usage",usage[0])
+                .put("thinking",think.length()>0?think.toString():"");
         } finally { deadline.cancel(); c.disconnect(); }
     }
 }
