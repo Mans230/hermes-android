@@ -37,6 +37,7 @@ public final class ChatService extends Service {
         if(busy)return START_NOT_STICKY;
         threadId=intent.getStringExtra("thread");
         final String activeThread=threadId,turn=intent.getStringExtra("turn");
+        try{Store.get(this).edit(d->Store.find(d.getJSONArray("threads"),threadId).remove("resumeTurn"));}catch(Exception ignored){}
         text="";model="";progress="";busy=true;reserved=false;relayRound=0;relayTotal=0;relayStop=false;revision++;
         NotificationManager nm=getSystemService(NotificationManager.class);
         nm.createNotificationChannel(new NotificationChannel("responses","Agent replies",NotificationManager.IMPORTANCE_DEFAULT));
@@ -134,6 +135,35 @@ public final class ChatService extends Service {
         if(e instanceof java.net.UnknownHostException)return "Server is unreachable. Check the address and network.";
         if(e instanceof java.io.IOException && e.getMessage()!=null)return e.getMessage();
         return "Could not complete this reply. Check the connection and Hermes API version.";
+    }
+    private static volatile boolean netWatch=false;
+    /** Saves a turn for auto-delivery when connectivity returns; nothing has executed yet, so resending is safe. */
+    public static void queueOffline(android.content.Context c,String threadId,String turn){
+        try{Store.get(c).edit(d->Store.find(d.getJSONArray("threads"),threadId).put("resumeTurn",turn));}catch(Exception ignored){}
+        watchNetwork(c);
+    }
+    public static synchronized void watchNetwork(final android.content.Context c){
+        if(netWatch)return;netWatch=true;
+        android.net.ConnectivityManager cm=(android.net.ConnectivityManager)c.getSystemService(android.content.Context.CONNECTIVITY_SERVICE);
+        if(cm==null)return;
+        cm.registerNetworkCallback(new android.net.NetworkRequest.Builder().addCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET).build(),
+            new android.net.ConnectivityManager.NetworkCallback(){
+                @Override public void onAvailable(android.net.Network network){
+                    try{
+                        Store store=Store.get(c);JSONArray threads=store.read().getJSONArray("threads");
+                        for(int i=0;i<threads.length();i++){
+                            JSONObject t=threads.getJSONObject(i);final String resumeTurn=t.optString("resumeTurn","");
+                            if(resumeTurn.isEmpty())continue;
+                            boolean has=false;JSONArray rows=t.getJSONArray("messages");
+                            for(int j=0;j<rows.length();j++){JSONObject r=rows.getJSONObject(j);if(r.optString("turn").equals(resumeTurn)&&r.optString("status").equals("queued"))has=true;}
+                            store.edit(d->Store.find(d.getJSONArray("threads"),t.getString("id")).remove("resumeTurn"));
+                            if(!has)continue;
+                            Intent intent=new Intent(c,ChatService.class).putExtra("thread",t.getString("id")).putExtra("turn",resumeTurn);
+                            if(Build.VERSION.SDK_INT>=26)c.startForegroundService(intent);else c.startService(intent);
+                        }
+                    }catch(Exception ignored){}
+                }
+            });
     }
     @Override public void onTimeout(int startId,int type){stopSelf();}
 }

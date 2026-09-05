@@ -79,6 +79,8 @@ public final class MainActivity extends Activity {
         LinearLayout words=column();TextView big=label(title,27,WHITE);big.setTypeface(null,Typeface.BOLD);words.addView(big);gap(words,5);
         if(!subtitle.isEmpty())words.addView(label(subtitle,12,MUTED));
         h.addView(words,new LinearLayout.LayoutParams(0,-2,1));
+        TextView mailIc=label("✉",23,MUTED);mailIc.setGravity(Gravity.CENTER);mailIc.setContentDescription(tr("البريد","Inbox"));
+        mailIc.setOnClickListener(v->{page="inbox";act(()->show());});h.addView(mailIc,new LinearLayout.LayoutParams(dp(44),dp(44)));
         TextView settings=label("☷",24,MUTED);settings.setGravity(Gravity.CENTER);settings.setContentDescription(tr("الإعدادات","Settings"));
         settings.setOnClickListener(v->{page="settings";act(()->show());});h.addView(settings,new LinearLayout.LayoutParams(dp(44),dp(44)));root.addView(h);
     }
@@ -95,6 +97,8 @@ public final class MainActivity extends Activity {
         if(page.equals("chat")){showChat();return;}
         if(page.equals("settings")){
             LinearLayout top=row();top.setPadding(dp(12),dp(12),dp(20),dp(8));top.addView(back(()->{page="bots";show();}));top.addView(label(tr("الإعدادات","Settings"),24,WHITE));root.addView(top);
+        }else if(page.equals("inbox")){
+            LinearLayout top=row();top.setPadding(dp(12),dp(12),dp(20),dp(8));top.addView(back(()->{page="bots";show();}));top.addView(label(tr("البريد — صناديق بوتاتك","Inbox — your bots' mailboxes"),24,WHITE));root.addView(top);
         }else header(tr("البوتات","Bots"),"○  "+store.read().optString("serverName","birella"));
         if(page.equals("bots")){
             LinearLayout searchRow=row();searchRow.setPadding(dp(20),dp(10),dp(20),dp(2));
@@ -110,6 +114,7 @@ public final class MainActivity extends Activity {
         }
         ScrollView scroll=new ScrollView(this);scroll.setFillViewport(true);body=column();body.setPadding(dp(20),dp(8),dp(20),dp(12));scroll.addView(body);root.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));
         if(page.equals("settings")){showSettings();return;}
+        if(page.equals("inbox")){showInboxContent();return;}
         showBots();
         LinearLayout footer=row();footer.setGravity(Gravity.CENTER);footer.setPadding(dp(20),dp(12),dp(20),dp(18));
         footer.addView(button(tr("جروب جديد","New group"),false,()->newGroup()));
@@ -142,17 +147,37 @@ public final class MainActivity extends Activity {
             if(pa!=pc)return pa?-1:1;
             return Long.compare(c.optLong("updated"),a.optLong("updated"));
         });
+        ArrayList<JSONObject> pinnedEntries=new ArrayList<>(),listEntries=new ArrayList<>();
+        for(JSONObject entry:visible){if(pinned(entry))pinnedEntries.add(entry);else listEntries.add(entry);}
+        if(!pinnedEntries.isEmpty()){
+            android.widget.HorizontalScrollView strip=new android.widget.HorizontalScrollView(this);strip.setHorizontalScrollBarEnabled(false);
+            LinearLayout track=row();track.setPadding(dp(8),dp(6),dp(8),dp(2));
+            for(JSONObject entry:pinnedEntries){
+                JSONObject b=entry.optJSONObject("bot"),t=entry.optJSONObject("thread");
+                JSONObject identity=b==null?new JSONObject().put("avatar","👥").put("photo",t.optString("photo")):b;
+                LinearLayout col=column();col.setGravity(Gravity.CENTER);col.setPadding(dp(6),dp(2),dp(6),dp(2));
+                View av=avatar(identity,56);
+                av.setOnClickListener(v->act(()->{if(t==null)newThread(b.getString("id"));else{currentThread=t.getString("id");page="chat";draft="";attached="";show();}}));
+                av.setOnLongClickListener(v->{act(()->{store.edit(x->{
+                    if(b!=null)Store.find(x.getJSONArray("bots"),b.getString("id")).put("pinned",false);
+                    else Store.find(x.getJSONArray("threads"),t.getString("id")).put("pinned",false);});show();});return true;});
+                col.addView(av,new LinearLayout.LayoutParams(dp(56),dp(56)));
+                TextView nm=label(b==null?t.getString("title"):b.getString("name"),10,MUTED);nm.setMaxLines(1);nm.setEllipsize(TextUtils.TruncateAt.END);nm.setGravity(Gravity.CENTER);
+                col.addView(nm,new LinearLayout.LayoutParams(dp(66),-2));
+                track.addView(col);
+            }
+            strip.addView(track);body.addView(strip);gap(body,6);
+        }
         if(visible.isEmpty()){
             gap(body,60);TextView empty=label(q.isEmpty()?tr("بوتاتك هتظهر هنا","Your bots will appear here"):tr("مفيش نتائج للبحث","No search results"),18,WHITE);empty.setGravity(Gravity.CENTER);body.addView(empty);gap(body,10);
             TextView hint=label(q.isEmpty()?tr("وصّل أول بوت عشان تبدأ.","Connect your first bot to get started."):tr("جرب كلمة تانية.","Try another word."),14,MUTED);hint.setGravity(Gravity.CENTER);body.addView(hint);
         }
-        for(JSONObject entry:visible){
+        for(JSONObject entry:listEntries){
             JSONObject b=entry.optJSONObject("bot"),t=entry.optJSONObject("thread");boolean group=b==null;
             LinearLayout line=row();line.setPadding(0,dp(13),0,dp(13));
             line.addView(avatar(group?null:b,44),new LinearLayout.LayoutParams(dp(44),dp(44)));
             LinearLayout words=column();words.setPadding(dp(12),0,dp(8),0);
-            boolean pin=pinned(entry);
-            TextView title=label((pin?"📌 ":"")+(group?t.getString("title"):b.getString("name")),16,WHITE);title.setTypeface(null,Typeface.BOLD);title.setMaxLines(1);title.setEllipsize(TextUtils.TruncateAt.END);words.addView(title);gap(words,4);
+            TextView title=label(group?t.getString("title"):b.getString("name"),16,WHITE);title.setTypeface(null,Typeface.BOLD);title.setMaxLines(1);title.setEllipsize(TextUtils.TruncateAt.END);words.addView(title);gap(words,4);
             JSONArray messages=t==null?new JSONArray():t.getJSONArray("messages");String preview=messages.length()==0?(group?t.optString("description",tr("جروب جديد","New group")):b.optString("description",tr("لا توجد رسائل بعد","No messages yet"))):plain(messages.getJSONObject(messages.length()-1).opt("content"));
             TextView subtitle=label(preview.isEmpty()?tr("لا توجد رسائل بعد","No messages yet"):preview,13,MUTED);subtitle.setMaxLines(1);subtitle.setEllipsize(TextUtils.TruncateAt.END);words.addView(subtitle);line.addView(words,new LinearLayout.LayoutParams(0,-2,1));
             if(t!=null){
@@ -245,6 +270,41 @@ public final class MainActivity extends Activity {
         openWizard=new BotWizard(original);openWizard.show();
     }
 
+    private void showInboxContent()throws Exception {
+        JSONArray bots=store.read().getJSONArray("bots");ArrayList<JSONObject> mailBots=new ArrayList<>();
+        for(int i=0;i<bots.length();i++){JSONObject b=bots.getJSONObject(i);if(!b.optString("email","").isEmpty())mailBots.add(b);}
+        if(mailBots.isEmpty()){
+            gap(body,50);TextView e=label(tr("مفيش بوت ليه إيميل لسه","No bot has a mailbox yet"),18,WHITE);e.setGravity(Gravity.CENTER);body.addView(e);gap(body,10);
+            TextView h=label(tr("افتح أي بوت ← تعديل ← اكتب إيميله في خانة Hermes Mail Agent، وهيظهر صندوقه هنا.","Open a bot → Edit → set its email under Hermes Mail Agent, and its mailbox shows up here."),14,MUTED);h.setGravity(Gravity.CENTER);body.addView(h);
+            return;
+        }
+        gap(body,4);
+        for(JSONObject b:mailBots){
+            LinearLayout c=card();LinearLayout head=row();
+            head.addView(avatar(b,42),new LinearLayout.LayoutParams(dp(42),dp(42)));
+            LinearLayout words=column();words.setPadding(dp(12),0,0,0);
+            words.addView(label(b.optString("avatar","🤖")+"  "+b.getString("name"),15,WHITE));
+            words.addView(label(b.optString("email"),12,MUTED));head.addView(words,new LinearLayout.LayoutParams(0,-2,1));c.addView(head);
+            gap(c,12);
+            LinearLayout btns=row();btns.setGravity(Gravity.CENTER);
+            btns.addView(button(tr("📬 فحص الوارد","📬 Check inbox"),false,()->openBotMailbox(b,true)));
+            TextView send=button(tr("✉️ إيميل جديد","✉️ New email"),true,()->openBotMailbox(b,false));LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(0,-2,1);lp.setMarginStart(dp(10));btns.addView(send,lp);
+            c.addView(btns);body.addView(c);
+        }
+        gap(body,8);body.addView(label(tr("قراءة الإيميل بتحصل على سيرفرك عبر أدوات البريد (Hermes Mail Agent / IMAP) — التطبيق بيوجه بوتك ويعرض رده في الشات.","Mail is actually read on your server via mail tools (Hermes Mail Agent / IMAP) — the app instructs your bot and shows its reply in chat."),12,MUTED));
+    }
+    private void openBotMailbox(JSONObject b,boolean check)throws Exception {
+        JSONArray threads=store.read().getJSONArray("threads");String target="";long best=-1;
+        for(int i=0;i<threads.length();i++){JSONObject t=threads.getJSONObject(i);
+            if(!Conversations.group(t)&&t.optString("botId").equals(b.getString("id"))&&t.optLong("updated")>best){best=t.optLong("updated");target=t.getString("id");}}
+        if(target.isEmpty())target=store.createThread(b.getString("id"),tr("محادثة جديدة","New conversation"));
+        currentThread=target;page="chat";draft="";attached="";show();
+        if(check){
+            if(ChatService.isActive())throw new Exception(tr("استنى الرد يخلص.","Wait for the active reply."));
+            composer.setText(tr("افحص صندوق الوارد بتاعك ("+b.optString("email")+") عبر أدوات البريد، ولخص أي رسايل جديدة وحالة المهمة.","Check your inbox ("+b.optString("email")+") with your mail tools, then summarize any new mail and anything needing action."));
+            send(false);
+        }else composeEmail();
+    }
     private void showSettings()throws Exception {
         body.addView(button(tr("اتصال السيرفر الافتراضي","Default server connection"),false,()->editServer()));gap(body,14);
         body.addView(button(arabic?"Language: English":"اللغة: العربية",false,()->{arabic=!arabic;store.edit(d->d.put("language",arabic?"ar":"en"));show();}));gap(body,14);
@@ -254,7 +314,7 @@ public final class MainActivity extends Activity {
         }));gap(body,14);
         body.addView(button(fontLabel(),false,()->{float s=chatScale();store.edit(d->d.put("chatScale",s>1.05?0.85:s<0.95?1.0:1.15));show();}));gap(body,14);
         body.addView(button(tr("إظهار المحادثات المؤرشفة: ","Show archived conversations: ")+(store.read().optBoolean("showArchived",false)?tr("نعم","Yes"):tr("لا","No")),false,()->{store.edit(d->d.put("showArchived",!d.optBoolean("showArchived",false)));show();}));gap(body,24);
-        body.addView(label(tr("الضغط المطوّل على البوت يفتح قائمته (تعديل، تثبيت، نسخة). الضغط المطوّل على رسالتك يتيح تعديلها وإعادة إرسالها.\n\nالمحادثات والمفاتيح مشفّرة على الجهاز. الإشعارات للردود التي تبدأها هنا فقط.\n\nإعداد الشخصية يخص محادثات التطبيق؛ لا يغيّر SOUL.md على السيرفر.","Long-press a bot for its menu (edit, pin, duplicate). Long-press your own message to edit and resend it.\n\nChats and keys are encrypted on this device. Notifications cover replies started here.\n\nPersonality applies to app requests; it does not modify server SOUL.md."),14,MUTED));gap(body,32);body.addView(label("Hermes · Android client 0.6.0",12,MUTED));
+        body.addView(label(tr("الضغط المطوّل على البوت يفتح قائمته (تعديل، تثبيت، نسخة). الضغط المطوّل على رسالتك يتيح تعديلها وإعادة إرسالها.\n\nالمحادثات والمفاتيح مشفّرة على الجهاز. الإشعارات للردود التي تبدأها هنا فقط.\n\nإعداد الشخصية يخص محادثات التطبيق؛ لا يغيّر SOUL.md على السيرفر.","Long-press a bot for its menu (edit, pin, duplicate). Long-press your own message to edit and resend it.\n\nChats and keys are encrypted on this device. Notifications cover replies started here.\n\nPersonality applies to app requests; it does not modify server SOUL.md."),14,MUTED));gap(body,32);body.addView(label("Hermes · Android client 0.7.0",12,MUTED));
     }
     private String fontLabel()throws Exception {
         float s=chatScale();
@@ -311,6 +371,13 @@ public final class MainActivity extends Activity {
         new AlertDialog.Builder(this).setTitle(tr("الأعضاء — اضغط للإشارة","Members — tap to mention")).setItems(names,(d,n)->act(()->{JSONObject b=bot(ids.getString(n));composer.append("@"+Conversations.handle(b)+" ");composer.requestFocus();})).setNegativeButton(tr("رجوع","Close"),null).show();
     }
 
+    private boolean isOnline(){
+        android.net.ConnectivityManager cm=(android.net.ConnectivityManager)getSystemService(android.content.Context.CONNECTIVITY_SERVICE);
+        if(cm==null)return false;
+        android.net.Network n=cm.getActiveNetwork();if(n==null)return false;
+        android.net.NetworkCapabilities cap=cm.getNetworkCapabilities(n);
+        return cap!=null&&cap.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET);
+    }
     private void markRead(){
         if(store==null||messageList==null||visibleThread.isEmpty())return;
         final String id=visibleThread;try{store.edit(d->{JSONObject t=Store.find(d.getJSONArray("threads"),id);t.put("readAt",System.currentTimeMillis());});}catch(Exception ignored){}
@@ -377,7 +444,8 @@ public final class MainActivity extends Activity {
                 gap(outer,8);TextView summary=label("›  "+tr("نشاط الأدوات","Tool activity")+"  ·  "+tools.length(),12,MUTED);summary.setMinHeight(dp(36));summary.setGravity(Gravity.CENTER_VERTICAL);final JSONArray events=tools;
                 summary.setOnClickListener(v->{StringBuilder detail=new StringBuilder();for(int n=0;n<events.length();n++)detail.append("• ").append(events.optString(n)).append("\n");alert(tr("الأدوات المستخدمة","Observed tool activity"),detail.toString());});outer.addView(summary);
             }
-            if(pending||queued){gap(outer,5);outer.addView(label(queued?tr("في الانتظار…","Queued…"):active&&!ChatService.progress.isEmpty()?ChatService.progress:tr("● جاري الرد…","● Working…"),12,MUTED));}
+            if(user&&queued){gap(outer,5);outer.addView(label("⏳ "+tr("في الطابور — أول ما النت يرجع هتتبعت","Queued while offline — will send when back online"),11,MUTED));}
+            else if(pending||queued){gap(outer,5);outer.addView(label(queued?tr("في الانتظار…","Queued…"):active&&!ChatService.progress.isEmpty()?ChatService.progress:tr("● جاري الرد…","● Working…"),12,MUTED));}
             if(m.optString("status").equals("error")){
                 gap(outer,8);outer.addView(label(m.optString("error"),12,0xffed7171));
                 if(i>lastUser){gap(outer,6);TextView retry=label(tr("إعادة المحاولة","Retry"),13,WHITE);retry.setMinHeight(dp(40));retry.setGravity(Gravity.CENTER_VERTICAL);retry.setOnClickListener(v->new AlertDialog.Builder(this).setTitle(tr("إعادة إرسال الطلب؟","Retry this bot?"))
@@ -474,7 +542,10 @@ public final class MainActivity extends Activity {
             }
             for(String botId:recipients)rows.put(Conversations.pending(Store.find(d.getJSONArray("bots"),botId),turn));target.put("updated",System.currentTimeMillis());
         });}catch(Exception e){ChatService.releaseReservation();throw e;}
-        try{startForegroundService(new Intent(this,ChatService.class).putExtra("thread",id).putExtra("turn",turn));}
+        if(!isOnline()){
+            ChatService.queueOffline(this,id,turn);
+            Toast.makeText(this,tr("مفيش نت — الرسالة في الطابور وهتتبعت أول ما يرجع.","No network — message queued and will send once you're back online."),Toast.LENGTH_LONG).show();
+        }else try{startForegroundService(new Intent(this,ChatService.class).putExtra("thread",id).putExtra("turn",turn));}
         catch(Exception e){ChatService.releaseReservation();store.edit(d->{JSONArray rows=Store.find(d.getJSONArray("threads"),id).getJSONArray("messages");for(int j=0;j<rows.length();j++)if(rows.getJSONObject(j).optString("turn").equals(turn)&&rows.getJSONObject(j).optString("status").equals("queued"))rows.getJSONObject(j).put("status","error").put("error","Could not start reply service");});throw e;}
         if(retryBot==null){draft="";attached="";composer.setText("");updateAttachment();}renderMessages();
     }
