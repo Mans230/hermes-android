@@ -82,7 +82,7 @@ public final class MainActivity extends Activity {
     private void header(String title,String subtitle){
         LinearLayout h=row();h.setPadding(dp(20),dp(18),dp(14),dp(8));
         LinearLayout words=column();TextView big=label(title,27,WHITE);big.setTypeface(null,Typeface.BOLD);words.addView(big);gap(words,5);
-        if(!subtitle.isEmpty())words.addView(label(subtitle,12,MUTED));
+        if(!subtitle.isEmpty()){TextView sub=label(subtitle,12,MUTED);sub.setContentDescription(tr("تبديل السيرفر","Switch server"));sub.setOnClickListener(v->act(()->switchConnection()));words.addView(sub);}
         h.addView(words,new LinearLayout.LayoutParams(0,-2,1));
         TextView mailIc=label("✉",23,MUTED);mailIc.setGravity(Gravity.CENTER);mailIc.setContentDescription(tr("البريد","Inbox"));
         mailIc.setOnClickListener(v->{page="inbox";act(()->show());});h.addView(mailIc,new LinearLayout.LayoutParams(dp(44),dp(44)));
@@ -104,7 +104,10 @@ public final class MainActivity extends Activity {
             LinearLayout top=row();top.setPadding(dp(12),dp(12),dp(20),dp(8));top.addView(back(()->{page="bots";show();}));top.addView(label(tr("الإعدادات","Settings"),24,WHITE));root.addView(top);
         }else if(page.equals("inbox")){
             LinearLayout top=row();top.setPadding(dp(12),dp(12),dp(20),dp(8));top.addView(back(()->{page="bots";show();}));top.addView(label(tr("البريد — صناديق بوتاتك","Inbox — your bots' mailboxes"),24,WHITE));root.addView(top);
-        }else header(tr("البوتات","Bots"),"○  "+store.read().optString("serverName","birella"));
+        }else{
+            JSONObject ac=store.activeConnection();
+            header(tr("البوتات","Bots"),"⟳  "+(ac==null?store.read().optString("serverName","birella"):ac.optString("name","server")+" — "+tr("اضغط للتبديل","tap to switch")));
+        }
         if(page.equals("bots")){
             LinearLayout searchRow=row();searchRow.setPadding(dp(20),dp(10),dp(20),dp(2));
             EditText search=new EditText(this);search.setSingleLine(true);search.setTextSize(14);search.setTextColor(WHITE);search.setHintTextColor(MUTED);
@@ -211,11 +214,14 @@ public final class MainActivity extends Activity {
     }
     private void botMenu(JSONObject b)throws Exception {
         String pin=b.optBoolean("pinned",false)?tr("إلغاء التثبيت","Unpin"):tr("تثبيت في الأعلى","Pin to top");
-        String[] items={tr("تعديل البوت","Edit bot"),pin,tr("نسخة من البوت","Duplicate bot")};
+        String[] items={tr("تعديل البوت","Edit bot"),pin,tr("نسخة من البوت","Duplicate bot"),tr("استخدم الاتصال النشط","Use active connection")};
         new AlertDialog.Builder(this).setTitle(b.optString("avatar","🤖")+" "+b.getString("name")).setItems(items,(d,n)->act(()->{
             if(n==0)editBot(b);
             if(n==1){store.edit(x->{boolean value=!Store.find(x.getJSONArray("bots"),b.getString("id")).optBoolean("pinned",false);Store.find(x.getJSONArray("bots"),b.getString("id")).put("pinned",value);});show();}
             if(n==2)duplicateBot(b);
+            if(n==3){JSONObject ac=store.activeConnection();if(ac==null)throw new Exception(tr("أضف اتصالًا من الإعدادات الأول.","Add a connection in Settings first."));
+                store.edit(x->{JSONObject row=Store.find(x.getJSONArray("bots"),b.getString("id"));row.put("url",ac.optString("url")).put("key",ac.optString("key"));});
+                Toast.makeText(this,tr("اتصل بـ ","Connected to ")+ac.optString("name"),Toast.LENGTH_SHORT).show();show();}
         })).show();
     }
     private void duplicateBot(JSONObject original)throws Exception {
@@ -314,7 +320,7 @@ public final class MainActivity extends Activity {
         }else composeEmail();
     }
     private void showSettings()throws Exception {
-        body.addView(button(tr("اتصال السيرفر الافتراضي","Default server connection"),false,()->editServer()));gap(body,14);
+        body.addView(button(tr("اتصالات Hermes: ","Hermes connections: ")+store.read().optJSONArray("connections").length()+(store.activeConnection()!=null?"  ·  "+tr("النشط: ","active: ")+store.activeConnection().optString("name"):""),false,()->connectionsManager()));gap(body,14);
         body.addView(button(arabic?"Language: English":"اللغة: العربية",false,()->{arabic=!arabic;store.edit(d->d.put("language",arabic?"ar":"en"));show();}));gap(body,14);
         body.addView(button(tr("إشعارات الردود","Reply notifications"),false,()->{
             if(Build.VERSION.SDK_INT>=33&&checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED)requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS},9);
@@ -333,26 +339,72 @@ public final class MainActivity extends Activity {
             exportText=out.toString(2);exportName="hermes-backup.json";
             startActivityForResult(new Intent(Intent.ACTION_CREATE_DOCUMENT).setType("application/json").addCategory(Intent.CATEGORY_OPENABLE).putExtra(Intent.EXTRA_TITLE,exportName),42);
         }));gap(body,24);
-        body.addView(label(tr("الضغط المطوّل على البوت يفتح قائمته (تعديل، تثبيت، نسخة). الضغط المطوّل على رسالتك يتيح تعديلها وإعادة إرسالها.\n\nالمحادثات والمفاتيح مشفّرة على الجهاز. الإشعارات للردود التي تبدأها هنا فقط.\n\nإعداد الشخصية يخص محادثات التطبيق؛ لا يغيّر SOUL.md على السيرفر.","Long-press a bot for its menu (edit, pin, duplicate). Long-press your own message to edit and resend it.\n\nChats and keys are encrypted on this device. Notifications cover replies started here.\n\nPersonality applies to app requests; it does not modify server SOUL.md."),14,MUTED));gap(body,32);body.addView(label("Hermes · Android client 0.8.0",12,MUTED));
+        body.addView(label(tr("الضغط المطوّل على البوت يفتح قائمته (تعديل، تثبيت، نسخة). الضغط المطوّل على رسالتك يتيح تعديلها وإعادة إرسالها.\n\nالمحادثات والمفاتيح مشفّرة على الجهاز. الإشعارات للردود التي تبدأها هنا فقط.\n\nإعداد الشخصية يخص محادثات التطبيق؛ لا يغيّر SOUL.md على السيرفر.","Long-press a bot for its menu (edit, pin, duplicate). Long-press your own message to edit and resend it.\n\nChats and keys are encrypted on this device. Notifications cover replies started here.\n\nPersonality applies to app requests; it does not modify server SOUL.md."),14,MUTED));gap(body,32);body.addView(label("Hermes · Android client 0.9.0",12,MUTED));
     }
     private String fontLabel()throws Exception {
         float s=chatScale();
         return tr("حجم خط الشات: ","Chat font size: ")+(s>1.05?tr("كبير","Large"):s>0.95?tr("عادي","Normal"):tr("صغير","Small"));
     }
-    private void editServer()throws Exception {
-        JSONObject current=store.read().optJSONObject("server");LinearLayout form=column();form.setPadding(dp(22),dp(16),dp(22),dp(16));
-        EditText name=field(form,tr("اسم السيرفر","Server name"),store.read().optString("serverName","birella"),false);
-        EditText url=field(form,"HTTPS URL",current==null?"":current.optString("url"),false);url.setHint("https://birella.your-tailnet.ts.net");
-        EditText key=field(form,"Hermes API key",current==null?"":current.optString("key"),true);
-        form.addView(label(tr("يُستخدم للبوتات التي تضيفها بعد الحفظ. لا يغير اتصالات البوتات الموجودة.","Used as the default for newly added bots. Existing bot connections stay as configured."),13,MUTED));
-        AlertDialog d=new AlertDialog.Builder(this).setTitle(tr("اتصال السيرفر","Server connection")).setView(form).setNegativeButton(tr("رجوع","Cancel"),null).setPositiveButton(tr("حفظ","Save"),null).setNeutralButton(tr("اختبار","Test"),null).create();
-        java.util.concurrent.Callable<JSONObject> value=()->{String k=key.getText().toString().trim();if(k.isEmpty()||k.contains("\n")||k.contains("\r"))throw new Exception("Enter the Hermes API key");return new JSONObject().put("url",Endpoint.normalize(url.getText().toString())).put("key",k);};
-        d.setOnShowListener(v->{d.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(w->act(()->{JSONObject server=value.call();store.edit(x->x.put("server",server).put("serverName",name.getText().toString().trim()));d.dismiss();show();}));
-            d.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener(w->act(()->testConnection(value.call(),d.getButton(AlertDialog.BUTTON_NEUTRAL))));});d.show();
+    private void connectionsManager()throws Exception {
+        JSONArray conns=store.read().getJSONArray("connections");String active=store.read().optString("activeConnection");
+        java.util.List<String> labels=new ArrayList<>();
+        for(int i=0;i<conns.length();i++){JSONObject c=conns.getJSONObject(i);labels.add((c.optString("id").equals(active)?"●  ":"○  ")+c.optString("name")+"\n"+c.optString("url"));}
+        labels.add("＋  "+tr("إضافة اتصال جديد","Add new connection"));
+        new AlertDialog.Builder(this).setTitle(tr("اتصالات Hermes — البيت، VPS، كلاود…","Hermes connections — home, VPS, cloud…")).setItems(labels.toArray(new String[0]),(d,n)->act(()->{
+            if(n==conns.length()){editConnection(null);return;}
+            JSONObject c=conns.getJSONObject(n);
+            String[] acts={tr("اجعله النشط","Make active"),tr("تعديل","Edit"),tr("اختبار الاتصال","Test connection"),tr("حذف","Delete")};
+            new AlertDialog.Builder(this).setTitle(c.optString("name")).setItems(acts,(d2,m)->act(()->{
+                if(m==0){store.edit(x->x.put("activeConnection",c.optString("id")));Toast.makeText(this,tr("الاتصال النشط: ","Active: ")+c.optString("name"),Toast.LENGTH_SHORT).show();show();}
+                if(m==1)editConnection(c);
+                if(m==2)testConnection(c,null);
+                if(m==3){
+                    if(conns.length()<=1)throw new Exception(tr("لازم يفضل اتصال واحد على الأقل.","Keep at least one connection."));
+                    store.edit(x->{JSONArray arr=x.getJSONArray("connections");for(int i=arr.length()-1;i>=0;i--)if(arr.getJSONObject(i).optString("id").equals(c.optString("id")))arr.remove(i);
+                        if(x.optString("activeConnection").equals(c.optString("id")))x.put("activeConnection",x.getJSONArray("connections").getJSONObject(0).optString("id"));});
+                    show();
+                }
+            })).show();
+        })).show();
+    }
+    private void editConnection(JSONObject existing)throws Exception {
+        boolean isNew=existing==null;
+        LinearLayout form=column();form.setPadding(dp(22),dp(16),dp(22),dp(16));
+        EditText name=field(form,tr("اسم الاتصال","Connection name"),isNew?"":existing.optString("name"),false);
+        EditText url=field(form,"HTTPS URL",isNew?"":existing.optString("url"),false);url.setHint("https://birella.your-tailnet.ts.net");
+        EditText key=field(form,"Hermes API key",isNew?"":existing.optString("key"),true);
+        form.addView(label(tr("يُستخدم للبوتات الجديدة، وتقدر تطبّقه على بوت موجود من قايمته. البوتات الحالية بتفضل على اتصالاتها.","Used for new bots; apply it to an existing bot from its menu. Existing bots keep their own connections."),13,MUTED));
+        AlertDialog d=new AlertDialog.Builder(this).setTitle(isNew?tr("اتصال جديد","New connection"):tr("تعديل الاتصال","Edit connection")).setView(form)
+            .setNegativeButton(tr("رجوع","Cancel"),null).setPositiveButton(tr("حفظ","Save"),null).setNeutralButton(tr("اختبار","Test"),null).create();
+        java.util.concurrent.Callable<JSONObject> value=()->{String k=key.getText().toString().trim();if(k.isEmpty()||k.contains("\n")||k.contains("\r"))throw new Exception("Enter the Hermes API key");
+            return new JSONObject().put("url",Endpoint.normalize(url.getText().toString())).put("key",k);};
+        d.setOnShowListener(v->{
+            d.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(w->act(()->{
+                JSONObject conn=value.call();String nm0=name.getText().toString().trim();
+                final String nm=nm0.isEmpty()?tr("سيرفر","server"):nm0;
+                final String cid=isNew?Store.id():existing.optString("id");
+                store.edit(x->{JSONObject row=new JSONObject(conn.toString()).put("id",cid).put("name",nm);JSONArray arr=x.getJSONArray("connections");
+                    boolean replaced=false;for(int i=0;i<arr.length();i++)if(arr.getJSONObject(i).optString("id").equals(cid)){arr.put(i,row);replaced=true;}
+                    if(!replaced){arr.put(row);if(x.optString("activeConnection","").isEmpty())x.put("activeConnection",cid);}});
+                d.dismiss();show();
+            }));
+            d.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener(w->act(()->testConnection(value.call(),d.getButton(AlertDialog.BUTTON_NEUTRAL))));
+        });d.show();
+    }
+    private void switchConnection()throws Exception {
+        JSONArray conns=store.read().getJSONArray("connections");
+        if(conns.length()==0){editConnection(null);return;}
+        String active=store.read().optString("activeConnection");
+        String[] names=new String[conns.length()];
+        for(int i=0;i<conns.length();i++){JSONObject c=conns.getJSONObject(i);names[i]=(c.optString("id").equals(active)?"✓  ":"")+c.optString("name");}
+        new AlertDialog.Builder(this).setTitle(tr("بدّل سيرفر Hermes","Switch Hermes server")).setItems(names,(d,n)->act(()->{
+            store.edit(x->x.put("activeConnection",conns.getJSONObject(n).optString("id")));
+            Toast.makeText(this,tr("الاتصال النشط: ","Active: ")+conns.getJSONObject(n).optString("name"),Toast.LENGTH_SHORT).show();show();
+        })).setNeutralButton(tr("إدارة…","Manage…"),(d,n)->act(()->connectionsManager())).show();
     }
     private void testConnection(JSONObject bot,View button){
-        button.setEnabled(false);new Thread(()->{String error=null;try{HermesApi.check(bot);}catch(Exception e){error=e.getMessage();}final String result=error;
-            runOnUiThread(()->{if(isDestroyed())return;button.setEnabled(true);alert(result==null?tr("الاتصال نجح","Connected"):tr("الاتصال لم ينجح","Connection failed"),result==null?tr("Hermes API رد بنجاح.","Hermes API responded successfully."):result);});}).start();
+        if(button!=null)button.setEnabled(false);new Thread(()->{String error=null;try{HermesApi.check(bot);}catch(Exception e){error=e.getMessage();}final String result=error;
+            runOnUiThread(()->{if(isDestroyed())return;if(button!=null)button.setEnabled(true);alert(result==null?tr("الاتصال نجح","Connected"):tr("الاتصال لم ينجح","Connection failed"),result==null?tr("Hermes API رد بنجاح.","Hermes API responded successfully."):result);});}).start();
     }
 
     private void showChat()throws Exception {
@@ -776,7 +828,9 @@ public final class MainActivity extends Activity {
             if(editing)data=new JSONObject(original.toString());
             else{
                 data=new JSONObject().put("id",Store.id()).put("name","").put("avatar","🤖").put("model","hermes-agent");
-                JSONObject server=store.read().optJSONObject("server");if(server!=null)data.put("url",server.optString("url")).put("key",server.optString("key"));
+                JSONObject ac=store.activeConnection();
+                if(ac!=null)data.put("url",ac.optString("url")).put("key",ac.optString("key"));
+                else{JSONObject server=store.read().optJSONObject("server");if(server!=null)data.put("url",server.optString("url")).put("key",server.optString("key"));}
             }
         }
         void show()throws Exception {dialog=new Dialog(MainActivity.this,R.style.AppTheme);render();dialog.show();dialog.getWindow().setLayout(-1,-1);if(Build.VERSION.SDK_INT>=30)dialog.getWindow().setDecorFitsSystemWindows(false);}

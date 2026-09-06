@@ -53,6 +53,19 @@ public final class Store {
                 }
             }
         } else data = new JSONObject().put("bots", new JSONArray()).put("threads", new JSONArray()).put("language", "en");
+        if (data.optJSONArray("connections") == null) data.put("connections", new JSONArray());
+        if (data.optJSONArray("connections").length() == 0 && data.optJSONObject("server") != null && data.optJSONObject("server").optString("url").length() > 0) {
+            data.getJSONArray("connections").put(new JSONObject().put("id", "default").put("name", data.optString("serverName", "server"))
+                .put("url", data.optJSONObject("server").optString("url")).put("key", data.optJSONObject("server").optString("key")));
+            if (data.optString("activeConnection").isEmpty()) data.put("activeConnection", "default");
+        }
+    }
+    public synchronized JSONObject activeConnection() throws Exception {
+        JSONArray conns = data.getJSONArray("connections");
+        if (conns.length() == 0) return null;
+        String id = data.optString("activeConnection", "");
+        for (int i = 0; i < conns.length(); i++) if (conns.getJSONObject(i).optString("id").equals(id)) return conns.getJSONObject(i);
+        return conns.getJSONObject(0);
     }
     public synchronized JSONObject read() throws Exception { return new JSONObject(data.toString()); }
     public synchronized void edit(Edit edit) throws Exception {
