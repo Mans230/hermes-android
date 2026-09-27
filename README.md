@@ -70,7 +70,7 @@ gradle wrapper --gradle-version 8.11.1
 app/build/outputs/apk/debug/app-debug.apk
 ```
 
-ملف `.github/workflows/android.yml` يوفر نفس البناء والاختبارات على GitHub Actions عند وضع المشروع في مستودع تملكه. تابع نتائج البناء في تبويب Actions. لا تعتمد debug signing للاستخدام الدائم؛ ثبّت مفتاح release بعد اختبار الجهاز.
+ملف `.github/workflows/android.yml` يوفر نفس البناء والاختبارات على GitHub Actions عند وضع المشروع في مستودع تملكه. تابع نتائج البناء في تبويب Actions. أي tag بصيغة `v*` (مثل `v0.10.0`) يبني الـAPK ويرفقه تلقائيًا في GitHub Releases لتحميله من صفحة الإصدارات. لا تعتمد debug signing للاستخدام الدائم؛ ثبّت مفتاح release بعد اختبار الجهاز.
 
 ## فحوص الكود
 
