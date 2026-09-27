@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="shortcut_new_chat">محادثة جديدة</string>
+    <string name="shortcut_new_chat_long">محادثة جديدة مع بوت</string>
+    <string name="shortcut_voice">صوتي</string>
+    <string name="shortcut_voice_long">محادثة صوتية</string>
+</resources>

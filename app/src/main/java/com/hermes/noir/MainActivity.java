@@ -32,8 +32,13 @@ public final class MainActivity extends Activity {
     private final Handler handler=new Handler(Looper.getMainLooper());
     private long revision=-1;
     private final java.util.HashSet<String> expandedIds=new java.util.HashSet<>();
-    private TextView scrollDown, composerCount;
+    private TextView scrollDown, composerCount, stopChip, chatSearchCount;
     private ImageView attachPreview;
+    private EditText chatSearchBox;
+    private boolean chatSearch=false;
+    private String chatQuery="", pendingAction="";
+    private VoiceMode voiceMode;
+    private final Runnable chatSearchRefresh=()->act(()->renderMessages());
     private android.speech.tts.TextToSpeech tts;
     private final Runnable searchRefresh=()->act(()->{if(page.equals("bots")&&body!=null){body.removeAllViews();showBots();}});
     private float chatScale()throws Exception {return (float)store.read().optDouble("chatScale",1.0);}
@@ -50,14 +55,16 @@ public final class MainActivity extends Activity {
         try {
             store=Store.get(this);arabic=store.read().optString("language","en").equals("ar");
             if(state!=null){page=state.getString("page","bots");currentThread=state.getString("thread","");draft=state.getString("draft","");}
-            String launch=getIntent().getStringExtra("thread");if(launch!=null){currentThread=launch;page="chat";}
+            handleLaunch(getIntent());
             show();
+            runPending();
+            Alarms.scheduleAll(this);
         } catch(Exception e){
             TextView error=label("Could not open encrypted app storage. Your saved data has not been replaced.",18,WHITE);
             error.setPadding(dp(28),dp(80),dp(28),dp(28));error.setBackgroundColor(BG);setContentView(error);
         }
     }
-    @Override protected void onNewIntent(Intent i){super.onNewIntent(i);setIntent(i);String id=i.getStringExtra("thread");if(id!=null){currentThread=id;page="chat";act(()->show());}}
+    @Override protected void onNewIntent(Intent i){super.onNewIntent(i);setIntent(i);handleLaunch(i);act(()->show());runPending();}
     @Override protected void onResume(){super.onResume();handler.post(poll);}
     @Override protected void onPause(){super.onPause();handler.removeCallbacks(poll);markRead();saveDraft();}
     @Override protected void onDestroy(){if(tts!=null){try{tts.stop();tts.shutdown();}catch(Exception ignored){}}super.onDestroy();}
@@ -92,7 +99,7 @@ public final class MainActivity extends Activity {
 
     private void show() throws Exception {
         markRead();
-        composer=null;messageList=null;relayBar=null;relayLabel=null;
+        composer=null;messageList=null;relayBar=null;relayLabel=null;stopChip=null;chatSearchBox=null;chatSearchCount=null;
         root=column();root.setBackgroundColor(BG);root.setLayoutDirection(arabic?View.LAYOUT_DIRECTION_RTL:View.LAYOUT_DIRECTION_LTR);
         root.setOnApplyWindowInsetsListener((v,insets)->{
             if(Build.VERSION.SDK_INT>=30){Insets bars=insets.getInsets(WindowInsets.Type.systemBars()|WindowInsets.Type.ime());v.setPadding(bars.left,bars.top,bars.right,bars.bottom);}
@@ -328,6 +335,7 @@ public final class MainActivity extends Activity {
         }));gap(body,14);
         body.addView(button(fontLabel(),false,()->{float s=chatScale();store.edit(d->d.put("chatScale",s>1.05?0.85:s<0.95?1.0:1.15));show();}));gap(body,14);
         body.addView(button(tr("إظهار المحادثات المؤرشفة: ","Show archived conversations: ")+(store.read().optBoolean("showArchived",false)?tr("نعم","Yes"):tr("لا","No")),false,()->{store.edit(d->d.put("showArchived",!d.optBoolean("showArchived",false)));show();}));gap(body,14);
+        body.addView(button(tr("الرسائل المجدولة: ","Scheduled messages: ")+Alarms.list(store.read()).length(),false,()->schedulesManager()));gap(body,14);
         body.addView(button(tr("نسخة احتياطية لكل المحادثات (بدون مفاتيح)","Backup all conversations (no keys)"),false,()->{
             JSONObject data=store.read();JSONObject out=new JSONObject();
             out.put("exportedAt",System.currentTimeMillis()).put("threads",data.getJSONArray("threads"));
@@ -339,7 +347,7 @@ public final class MainActivity extends Activity {
             exportText=out.toString(2);exportName="hermes-backup.json";
             startActivityForResult(new Intent(Intent.ACTION_CREATE_DOCUMENT).setType("application/json").addCategory(Intent.CATEGORY_OPENABLE).putExtra(Intent.EXTRA_TITLE,exportName),42);
         }));gap(body,24);
-        body.addView(label(tr("الضغط المطوّل على البوت يفتح قائمته (تعديل، تثبيت، نسخة). الضغط المطوّل على رسالتك يتيح تعديلها وإعادة إرسالها.\n\nالمحادثات والمفاتيح مشفّرة على الجهاز. الإشعارات للردود التي تبدأها هنا فقط.\n\nإعداد الشخصية يخص محادثات التطبيق؛ لا يغيّر SOUL.md على السيرفر.","Long-press a bot for its menu (edit, pin, duplicate). Long-press your own message to edit and resend it.\n\nChats and keys are encrypted on this device. Notifications cover replies started here.\n\nPersonality applies to app requests; it does not modify server SOUL.md."),14,MUTED));gap(body,32);body.addView(label("Hermes · Android client 0.9.0",12,MUTED));
+        body.addView(label(tr("الضغط المطوّل على البوت يفتح قائمته (تعديل، تثبيت، نسخة). الضغط المطوّل على رسالتك يتيح تعديلها وإعادة إرسالها.\n\nالمحادثات والمفاتيح مشفّرة على الجهاز. الإشعارات للردود التي تبدأها هنا فقط.\n\nإعداد الشخصية يخص محادثات التطبيق؛ لا يغيّر SOUL.md على السيرفر.","Long-press a bot for its menu (edit, pin, duplicate). Long-press your own message to edit and resend it.\n\nChats and keys are encrypted on this device. Notifications cover replies started here.\n\nPersonality applies to app requests; it does not modify server SOUL.md."),14,MUTED));gap(body,32);body.addView(label("Hermes · Android client 0.10.0",12,MUTED));
     }
     private String fontLabel()throws Exception {
         float s=chatScale();
@@ -416,7 +424,24 @@ public final class MainActivity extends Activity {
         int rounds=Relay.clamp(t.optInt("relayRounds",0));
         String sub=group?Conversations.members(t).length()+tr(" أعضاء"," members")+(rounds>0?" · ⟳"+rounds:""):(b.optString("model","hermes-agent").equals("hermes-agent")?tr("موديل Hermes الافتراضي","Hermes default"):b.optString("model"));names.addView(label(sub,11,MUTED));
         names.setOnClickListener(v->act(()->{if(group)showMembers();else editBot(b);}));h.addView(names,new LinearLayout.LayoutParams(0,-2,1));
+        TextView srch=label("🔍",15,chatSearch?WHITE:MUTED);srch.setGravity(Gravity.CENTER);srch.setContentDescription(tr("بحث في المحادثة","Search in chat"));
+        srch.setOnClickListener(v->{saveDraft();chatSearch=!chatSearch;chatQuery=chatSearch?chatQuery:"";act(()->show());});
+        h.addView(srch,new LinearLayout.LayoutParams(dp(36),dp(44)));
         TextView menu=label("⋯",22,MUTED);menu.setGravity(Gravity.CENTER);menu.setOnClickListener(v->act(()->chatMenu()));h.addView(menu,new LinearLayout.LayoutParams(dp(36),dp(44)));root.addView(h);
+        if(chatSearch){
+            LinearLayout srow=row();srow.setPadding(dp(16),dp(4),dp(16),dp(4));
+            chatSearchBox=new EditText(this);chatSearchBox.setSingleLine(true);chatSearchBox.setTextSize(14);chatSearchBox.setTextColor(WHITE);chatSearchBox.setHintTextColor(MUTED);
+            chatSearchBox.setHint(tr("ابحث في المحادثة…","Search this chat…"));chatSearchBox.setText(chatQuery);
+            chatSearchBox.setBackground(shape(0xff0c0c0c,LINE,22));chatSearchBox.setPadding(dp(16),dp(10),dp(16),dp(10));
+            chatSearchBox.addTextChangedListener(new android.text.TextWatcher(){
+                public void beforeTextChanged(CharSequence s,int a,int b,int c){}
+                public void onTextChanged(CharSequence s,int a,int b,int c){}
+                public void afterTextChanged(android.text.Editable s){chatQuery=s.toString();handler.removeCallbacks(chatSearchRefresh);handler.postDelayed(chatSearchRefresh,250);}
+            });
+            srow.addView(chatSearchBox,new LinearLayout.LayoutParams(0,-2,1));
+            chatSearchCount=label("",11,MUTED);chatSearchCount.setPadding(dp(10),0,0,0);
+            srow.addView(chatSearchCount);root.addView(srow);
+        }
         chatScroll=new ScrollView(this);chatScroll.setFillViewport(true);messageList=column();messageList.setGravity(Gravity.BOTTOM);messageList.setPadding(dp(20),dp(18),dp(20),dp(14));chatScroll.addView(messageList);root.addView(chatScroll,new LinearLayout.LayoutParams(-1,0,1));
         LinearLayout input=column();input.setPadding(dp(16),dp(6),dp(16),dp(12));attachmentLabel=label("",12,MUTED);attachmentLabel.setPadding(dp(8),dp(3),dp(8),dp(6));attachmentLabel.setOnClickListener(v->{attached="";updateAttachment();});input.addView(attachmentLabel);
         attachPreview=new ImageView(this);attachPreview.setScaleType(ImageView.ScaleType.FIT_CENTER);attachPreview.setVisibility(View.GONE);
@@ -440,6 +465,11 @@ public final class MainActivity extends Activity {
         TextView stopRelay=label(tr("إيقاف الحوار","Stop relay"),13,0xffed7171);stopRelay.setTypeface(null,Typeface.BOLD);
         stopRelay.setOnClickListener(v->{ChatService.requestRelayStop();act(()->renderMessages());});relayBar.addView(stopRelay);
         gap(input,8);input.addView(relayBar);gap(input,6);
+        stopChip=label("⏹ "+tr("إيقاف الرد","Stop"),13,0xffed7171);stopChip.setTypeface(null,Typeface.BOLD);stopChip.setGravity(Gravity.CENTER);
+        stopChip.setPadding(dp(16),dp(9),dp(16),dp(9));stopChip.setVisibility(View.GONE);stopChip.setBackground(shape(CARD,LINE,18));
+        stopChip.setContentDescription(tr("إيقاف الرد الحالي","Stop current reply"));
+        stopChip.setOnClickListener(v->{ChatService.requestStreamStop();act(()->renderMessages());});
+        LinearLayout.LayoutParams stLp=new LinearLayout.LayoutParams(-2,-2);stLp.gravity=Gravity.CENTER_HORIZONTAL;input.addView(stopChip,stLp);gap(input,6);
         scrollDown=label("↓ "+tr("آخر الرسايل","Latest messages"),12,WHITE);scrollDown.setGravity(Gravity.CENTER);scrollDown.setPadding(dp(16),dp(8),dp(16),dp(8));scrollDown.setVisibility(View.GONE);
         scrollDown.setBackground(shape(CARD,LINE,18));scrollDown.setOnClickListener(v->chatScroll.post(()->chatScroll.fullScroll(View.FOCUS_DOWN)));
         LinearLayout.LayoutParams sdLp=new LinearLayout.LayoutParams(-2,-2);sdLp.gravity=Gravity.CENTER_HORIZONTAL;input.addView(scrollDown,sdLp);gap(input,6);
@@ -462,6 +492,7 @@ public final class MainActivity extends Activity {
             .putExtra(android.speech.RecognizerIntent.EXTRA_PROMPT,tr("اتكلم دلوقتي…","Speak now…")),45);}
             catch(Exception e){alert(tr("الإدخال الصوتي غير متاح","Voice input unavailable"),tr("الخدمة دي مش متاحة على جهازك.","Speech recognition is not available on this device."));}});
         bar.addView(mic,new LinearLayout.LayoutParams(dp(36),dp(44)));
+        mic.setOnLongClickListener(v->{startVoice();return true;});
         sendButton=label("↑",24,BG);sendButton.setGravity(Gravity.CENTER);sendButton.setBackground(shape(WHITE,0,24));sendButton.setContentDescription(tr("إرسال","Send"));sendButton.setOnClickListener(v->act(()->send(false)));LinearLayout.LayoutParams send=new LinearLayout.LayoutParams(dp(34),dp(34));send.setMargins(dp(5),0,dp(4),0);bar.addView(sendButton,send);input.addView(bar);
         composerCount=label("",10,MUTED);composerCount.setGravity(Gravity.END);composerCount.setVisibility(View.GONE);input.addView(composerCount);
         root.addView(input);updateAttachment();renderMessages();
@@ -497,8 +528,16 @@ public final class MainActivity extends Activity {
         boolean atBottom=chatScroll.getChildAt(0).getHeight()-chatScroll.getHeight()-chatScroll.getScrollY()<dp(160);int oldY=chatScroll.getScrollY();messageList.removeAllViews();
         JSONObject thread=thread();JSONArray messages=thread.getJSONArray("messages");int lastUser=-1;
         for(int i=0;i<messages.length();i++)if(messages.getJSONObject(i).optString("role").equals("user"))lastUser=i;
+        String q=chatQuery.trim().toLowerCase(Locale.ROOT);
+        ArrayList<Integer> shownIdx=new ArrayList<>();
+        for(int i=0;i<messages.length();i++){JSONObject row=messages.getJSONObject(i);
+            if(q.isEmpty()||plain(row.opt("content")).toLowerCase(Locale.ROOT).contains(q)
+                ||row.optString("botName","").toLowerCase(Locale.ROOT).contains(q)
+                ||row.optString("thinking","").toLowerCase(Locale.ROOT).contains(q))shownIdx.add(i);}
+        if(chatSearchCount!=null)chatSearchCount.setText(shownIdx.size()+"/"+messages.length());
         java.util.Calendar dayCal=java.util.Calendar.getInstance();String lastDay="";
-        for(int i=0;i<messages.length();i++){
+        for(int idx=0;idx<shownIdx.size();idx++){
+            int i=shownIdx.get(idx);
             JSONObject m=messages.getJSONObject(i);boolean user=m.optString("role").equals("user"),pending=m.optString("status").equals("pending"),queued=m.optString("status").equals("queued");
             long msgTs=m.optLong("ts",0);
             if(msgTs>0){dayCal.setTimeInMillis(msgTs);String dayKey=dayCal.get(java.util.Calendar.YEAR)+"-"+dayCal.get(java.util.Calendar.DAY_OF_YEAR);
@@ -537,9 +576,8 @@ public final class MainActivity extends Activity {
             }else if(!value.isEmpty()){
                 boolean collapsed=value.length()>1500&&!expandedIds.contains(m.optString("id"));
                 String shown=collapsed?value.substring(0,1200)+" …":value;
-                TextView content=label("",16*scale,WHITE);content.setLineSpacing(dp(3),1);content.setTextIsSelectable(true);content.setTextDirection(View.TEXT_DIRECTION_FIRST_STRONG);content.setText(markdown(shown,0xff8ec9ff));
-                content.setOnLongClickListener(v->{act(()->messageMenu(m,value));return true;});
-                outer.addView(content,cp);
+                final String fullValue=value;
+                outer.addView(markdownView(shown,scale,()->act(()->messageMenu(m,fullValue))),cp);
                 if(collapsed){gap(outer,4);TextView more=label(tr("• اعرض الرسالة كاملة","• Show full message"),12,0xff8ec9ff);
                     more.setOnClickListener(v->{expandedIds.add(m.optString("id"));act(()->renderMessages());});outer.addView(more);}
             }
@@ -570,9 +608,10 @@ public final class MainActivity extends Activity {
             }
         }
         sendButton.setEnabled(!ChatService.isActive());sendButton.setAlpha(ChatService.isActive()?.3f:1f);
+        if(stopChip!=null){boolean busyHere=ChatService.isActive()&&currentThread.equals(ChatService.threadId);stopChip.setVisibility(busyHere?View.VISIBLE:View.GONE);}
         updateRelay();
         if(scrollDown!=null)scrollDown.setVisibility(atBottom?View.GONE:View.VISIBLE);
-        if(atBottom||messages.length()<=2)chatScroll.post(()->chatScroll.fullScroll(View.FOCUS_DOWN));else chatScroll.post(()->chatScroll.scrollTo(0,oldY));
+        if(atBottom||shownIdx.size()<=2)chatScroll.post(()->chatScroll.fullScroll(View.FOCUS_DOWN));else chatScroll.post(()->chatScroll.scrollTo(0,oldY));
     }
     private void saveDraft(){
         if(composer==null||store==null||currentThread.isEmpty())return;
@@ -698,6 +737,8 @@ public final class MainActivity extends Activity {
         labels.add(tr("تصدير Markdown","Export Markdown"));codes.add(4);
         labels.add(tr("أرشفة المحادثة","Archive conversation"));codes.add(5);
         if(!group){labels.add(tr("📬 فحص الوارد (Inbox)","📬 Check inbox"));codes.add(9);labels.add(tr("✉️ إرسال إيميل","✉️ Send email"));codes.add(10);}
+        labels.add(tr("⏰ رسالة مجدولة يوميًا","⏰ Daily scheduled message"));codes.add(13);
+        labels.add(tr("🎙 وضع المحادثة الصوتي","🎙 Voice mode"));codes.add(14);
         labels.add(tr("🔄 إعادة توليد آخر رد","🔄 Regenerate last reply"));codes.add(11);
         labels.add(tr("🚩 اعتبرها غير مقروءة","🚩 Mark unread"));codes.add(12);
         labels.add(tr("حذف من الموبايل","Delete from device"));codes.add(6);
@@ -723,6 +764,8 @@ public final class MainActivity extends Activity {
             if(code==8){JSONObject current=thread();if(Conversations.group(current)){currentThread=store.createGroup(Conversations.members(current),current.getString("title"));draft="";attached="";show();}else newThread(current.getString("botId"));}
             if(code==9)checkInbox();
             if(code==10)composeEmail();
+            if(code==13)scheduleDialog();
+            if(code==14)startVoice();
             if(code==11){
                 if(ChatService.isActive())throw new Exception(tr("استنى الرد يخلص.","Wait for the active reply."));
                 JSONObject t=thread();JSONArray rows=t.getJSONArray("messages");
@@ -816,6 +859,352 @@ public final class MainActivity extends Activity {
             String value="data:"+mime+";base64,"+android.util.Base64.encodeToString(bytes.toByteArray(),android.util.Base64.NO_WRAP);
             runOnUiThread(()->{if(!isDestroyed()){attached=value;updateAttachment();}});
         }catch(Exception e){runOnUiThread(()->{if(!isDestroyed())alert(tr("الصورة لم تُرفق","Image not attached"),e.getMessage());});}}).start();}
+    }
+    /** Renders assistant text as rich Markdown: headings, lists, quotes, code blocks with copy. */
+    private View markdownView(String input,float scale,Runnable longPress){
+        LinearLayout wrap=column();
+        for(Markdown.Block block:Markdown.parse(input)){
+            if(block.type==Markdown.CODE){wrap.addView(codeBlockView(block,scale));continue;}
+            if(block.type==Markdown.RULE){
+                View r=new View(this);r.setBackgroundColor(LINE);
+                LinearLayout.LayoutParams rp=new LinearLayout.LayoutParams(-1,dp(1));rp.topMargin=dp(8);rp.bottomMargin=dp(8);
+                wrap.addView(r,rp);continue;
+            }
+            if(block.type==Markdown.HEADING){
+                TextView h=spanTextView(block.items,scale,longPress);
+                h.setTypeface(null,Typeface.BOLD);h.setTextSize((float)(21-block.level*2)*scale);
+                LinearLayout.LayoutParams hp=new LinearLayout.LayoutParams(-1,-2);hp.topMargin=dp(8);hp.bottomMargin=dp(2);
+                wrap.addView(h,hp);continue;
+            }
+            if(block.type==Markdown.BULLETS||block.type==Markdown.ORDERED){
+                for(int n=0;n<block.items.size();n++){
+                    String prefix=block.type==Markdown.BULLETS?"•  ":(n+1)+".  ";
+                    TextView li=spanTextView(java.util.Collections.singletonList(block.items.get(n)),scale,longPress,prefix);
+                    li.setPadding(dp(14),dp(1),0,dp(1));
+                    wrap.addView(li,new LinearLayout.LayoutParams(-1,-2));
+                }
+                gap(wrap,4);continue;
+            }
+            if(block.type==Markdown.QUOTE){
+                LinearLayout quote=row();
+                View bar=new View(this);bar.setBackgroundColor(0xff555555);
+                quote.addView(bar,new LinearLayout.LayoutParams(dp(3),-2));
+                TextView qt=spanTextView(block.items,scale,longPress);
+                qt.setTextColor(SECONDARY);qt.setPadding(dp(10),dp(2),0,dp(2));
+                quote.addView(qt,new LinearLayout.LayoutParams(0,-2,1));
+                LinearLayout.LayoutParams qp=new LinearLayout.LayoutParams(-1,-2);qp.topMargin=dp(2);qp.bottomMargin=dp(2);
+                wrap.addView(quote,qp);continue;
+            }
+            TextView p=spanTextView(block.items,scale,longPress);
+            p.setTextIsSelectable(true);
+            wrap.addView(p,new LinearLayout.LayoutParams(-1,-2));
+            gap(wrap,6);
+        }
+        return wrap;
+    }
+    private View codeBlockView(Markdown.Block block,float scale){
+        LinearLayout box=column();box.setBackground(shape(0xff0c0c0c,LINE,14));box.setPadding(dp(10),dp(8),dp(10),dp(10));
+        LinearLayout top=row();
+        TextView lang=label(block.lang.isEmpty()?"code":block.lang,10,MUTED);
+        top.addView(lang,new LinearLayout.LayoutParams(0,-2,1));
+        TextView copy=label(tr("نسخ","Copy"),11,WHITE);copy.setTypeface(null,Typeface.BOLD);copy.setPadding(dp(8),dp(2),dp(8),dp(2));
+        copy.setContentDescription(tr("نسخ الكود","Copy code"));
+        copy.setOnClickListener(v->{try{
+            android.content.ClipboardManager cm=(android.content.ClipboardManager)getSystemService(android.content.Context.CLIPBOARD_SERVICE);
+            cm.setPrimaryClip(android.content.ClipData.newPlainText("hermes-code",block.code));
+            Toast.makeText(this,tr("اتنسخ","Copied"),Toast.LENGTH_SHORT).show();
+        }catch(Exception ignored){}});
+        top.addView(copy);box.addView(top);gap(box,6);
+        android.widget.HorizontalScrollView hs=new android.widget.HorizontalScrollView(this);hs.setHorizontalScrollBarEnabled(false);
+        TextView code=label(block.code,12.5f*scale,0xffd7d7d7);code.setTypeface(Typeface.MONOSPACE);code.setLineSpacing(dp(2),1);
+        code.setTextDirection(View.TEXT_DIRECTION_LTR);
+        hs.addView(code);box.addView(hs);
+        LinearLayout.LayoutParams bp=new LinearLayout.LayoutParams(-1,-2);bp.topMargin=dp(4);bp.bottomMargin=dp(4);
+        box.setLayoutParams(bp);
+        return box;
+    }
+    /** One TextView out of Markdown lines with emphasis, links, mentions and search highlights. */
+    private TextView spanTextView(java.util.List<Markdown.Line> lines,float scale,Runnable longPress){return spanTextView(lines,scale,longPress,"");}
+    private TextView spanTextView(java.util.List<Markdown.Line> lines,float scale,Runnable longPress,String prefix){
+        SpannableStringBuilder out=new SpannableStringBuilder();
+        java.util.regex.Pattern mention=java.util.regex.Pattern.compile("(?<![\\p{L}\\p{N}_@])@[a-zA-Z0-9_-]+");
+        boolean hasLink=false;
+        for(int li=0;li<lines.size();li++){
+            if(li>0)out.append('\n');
+            if(!prefix.isEmpty())out.append(prefix);
+            Markdown.Line line=lines.get(li);
+            int start=out.length();
+            out.append(line.text);
+            for(Markdown.Mark m:line.marks){
+                int s=start+m.start,e=start+m.end;if(e<=s)continue;
+                if(m.code){
+                    out.setSpan(new TypefaceSpan("monospace"),s,e,Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                    out.setSpan(new BackgroundColorSpan(0xff242424),s,e,Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                    out.setSpan(new RelativeSizeSpan(.88f),s,e,Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);continue;
+                }
+                if(m.bold)out.setSpan(new StyleSpan(Typeface.BOLD),s,e,Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                if(m.italic)out.setSpan(new StyleSpan(Typeface.ITALIC),s,e,Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                if(m.strike)out.setSpan(new StrikethroughSpan(),s,e,Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                if(m.link!=null){hasLink=true;
+                    out.setSpan(new ClickableSpan(){
+                        public void onClick(View widget){try{startActivity(new Intent(Intent.ACTION_VIEW,Uri.parse(m.link)));}catch(Exception ignored){}}
+                        public void updateDrawState(TextPaint ds){ds.setColor(0xff8ec9ff);ds.setUnderlineText(true);}
+                    },s,e,Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                }
+            }
+            String region=out.toString().substring(start,out.length());
+            java.util.regex.Matcher matcher=mention.matcher(region);
+            while(matcher.find()){
+                int s2=start+matcher.start(),e2=start+matcher.end();
+                out.setSpan(new ForegroundColorSpan(0xff8ec9ff),s2,e2,Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                out.setSpan(new StyleSpan(Typeface.BOLD),s2,e2,Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            }
+            String needle=chatQuery.trim().toLowerCase(Locale.ROOT);
+            if(!needle.isEmpty()){
+                String lower=region.toLowerCase(Locale.ROOT);int at=0;
+                while((at=lower.indexOf(needle,at))>=0){
+                    out.setSpan(new BackgroundColorSpan(0xff7a6500),start+at,start+at+needle.length(),Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                    at+=needle.length();
+                }
+            }
+        }
+        TextView tv=label("",16*scale,WHITE);tv.setLineSpacing(dp(3),1);tv.setTextDirection(View.TEXT_DIRECTION_FIRST_STRONG);
+        tv.setText(out);
+        if(hasLink)tv.setMovementMethod(android.text.method.LinkMovementMethod.getInstance());
+        if(longPress!=null)tv.setOnLongClickListener(v->{longPress.run();return true;});
+        return tv;
+    }
+
+    private void handleLaunch(Intent i){
+        if(i==null)return;
+        String id=i.getStringExtra("thread");
+        if(id!=null&&!id.isEmpty()){currentThread=id;page="chat";return;}
+        String action=i.getAction();
+        if(Intent.ACTION_SEND.equals(action)){
+            android.net.Uri stream=null;try{stream=i.getParcelableExtra(Intent.EXTRA_STREAM);}catch(Exception ignored){}
+            if(stream!=null){readSharedImage(stream);return;}
+            CharSequence shared=i.getCharSequenceExtra(Intent.EXTRA_TEXT);
+            if(shared!=null&&!shared.toString().trim().isEmpty()){draft=shared.toString();act(()->openLatest());}
+            return;
+        }
+        if("com.hermes.noir.NEW_CHAT".equals(action)){page="bots";pendingAction="newbot";return;}
+        if("com.hermes.noir.VOICE".equals(action)){page="bots";pendingAction="voice";return;}
+    }
+    private void runPending(){
+        String action=pendingAction;pendingAction="";
+        if("newbot".equals(action))act(()->editBot(null));
+        else if("voice".equals(action))act(()->{
+            openLatest();
+            if(!page.equals("chat")){alert(tr("مفيش محادثات","No chats"),tr("ابدأ محادثة الأول.","Start a chat first."));return;}
+            show();startVoice();
+        });
+    }
+    private void openLatest()throws Exception {
+        JSONArray threads=store.read().getJSONArray("threads");long best=-1;String target="";
+        for(int i=0;i<threads.length();i++){JSONObject t=threads.getJSONObject(i);if(t.optLong("updated")>best){best=t.optLong("updated");target=t.getString("id");}}
+        if(!target.isEmpty()){currentThread=target;page="chat";}
+    }
+    private void readSharedImage(android.net.Uri uri){
+        new Thread(()->{try{
+            String mime=getContentResolver().getType(uri);if(mime==null||!mime.startsWith("image/"))throw new Exception(tr("الملف مش صورة.","That file is not an image."));
+            ByteArrayOutputStream bytes=new ByteArrayOutputStream();
+            try(InputStream in=getContentResolver().openInputStream(uri)){if(in==null)throw new IOException("Cannot read image");
+                byte[] buf=new byte[8192];int n;while((n=in.read(buf))!=-1){bytes.write(buf,0,n);if(bytes.size()>5*1024*1024)throw new Exception("Image limit is 5 MB");}}
+            String value="data:"+mime+";base64,"+android.util.Base64.encodeToString(bytes.toByteArray(),android.util.Base64.NO_WRAP);
+            runOnUiThread(()->{if(isDestroyed())return;attached=value;act(()->openLatest());
+                if(!page.equals("chat"))Toast.makeText(this,tr("الصورة اتعلّمت — افتح أي محادثة وابعتهالبوت","Image attached — open a chat to send it"),Toast.LENGTH_LONG).show();
+                else act(()->show());});
+        }catch(Exception e){runOnUiThread(()->{if(!isDestroyed())alert(tr("الصورة لم تُرفق","Image not attached"),e.getMessage());});}},"hermes-share").start();
+    }
+
+    private void startVoice(){
+        if(ChatService.isActive()){alert(tr("فيه رد شغال","Reply in progress"),tr("استنى الرد يخلص الأول.","Wait for the current reply."));return;}
+        if(checkSelfPermission(Manifest.permission.RECORD_AUDIO)!=PackageManager.PERMISSION_GRANTED){requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO},10);return;}
+        try{
+            if(!android.speech.SpeechRecognizer.isRecognitionAvailable(this))throw new Exception(tr("التعرف على الكلام مش متاح على الجهاز.","Speech recognition is not available on this device."));
+            if(voiceMode!=null)voiceMode.close();
+            voiceMode=new VoiceMode();voiceMode.start();
+        }catch(Exception e){alert(tr("الوضع الصوتي غير متاح","Voice mode unavailable"),e.getMessage()==null?"":e.getMessage());}
+    }
+    /** Hands-free loop: listen → send through the normal pipeline → stream the reply out loud by sentence → listen again. */
+    private final class VoiceMode implements android.speech.RecognitionListener {
+        private Dialog dialog;private TextView status,heard,reply;
+        private android.speech.SpeechRecognizer recognizer;private android.speech.tts.TextToSpeech vtts;
+        private boolean closed=false,ttsReady=false,flushed=false,listening=false;
+        private int fed=0;
+        private final Runnable tick=new Runnable(){public void run(){
+            if(closed||dialog==null||!dialog.isShowing())return;
+            String full=ChatService.text;
+            if(currentThread.equals(ChatService.threadId)&&!full.isEmpty()){
+                if(fed<full.length()){
+                    int cut=-1;
+                    for(int k=full.length()-1;k>=fed;k--)if(".!؟?\n…".indexOf(full.charAt(k))>=0){cut=k;break;}
+                    if(cut>=fed){
+                        String sentence=plainish(full.substring(fed,cut+1)).trim();
+                        if(!sentence.isEmpty())speak(sentence);
+                        fed=cut+1;
+                    }
+                    reply.setText(full.length()>300?full.substring(full.length()-300):full);
+                }
+                if(!ChatService.busy&&!flushed){
+                    flushed=true;
+                    String rest=plainish(full.substring(Math.min(fed,full.length()))).trim();
+                    if(!rest.isEmpty())speak(rest);
+                    fed=full.length();
+                }
+            }
+            maybeListen();
+            handler.postDelayed(tick,150);
+        }};
+        void start(){
+            closed=false;ttsReady=false;flushed=false;listening=false;fed=0;
+            dialog=new Dialog(MainActivity.this,R.style.AppTheme);
+            LinearLayout panel=column();panel.setBackgroundColor(BG);panel.setGravity(Gravity.CENTER);
+            panel.setLayoutDirection(arabic?View.LAYOUT_DIRECTION_RTL:View.LAYOUT_DIRECTION_LTR);
+            panel.setOnApplyWindowInsetsListener((v,insets)->{if(Build.VERSION.SDK_INT>=30){Insets bars=insets.getInsets(WindowInsets.Type.systemBars()|WindowInsets.Type.ime());v.setPadding(bars.left,bars.top,bars.right,bars.bottom);}return insets;});
+            LinearLayout top=row();top.setPadding(dp(12),dp(12),dp(16),dp(10));
+            TextView close=label("×",28,MUTED);close.setGravity(Gravity.CENTER);close.setContentDescription(tr("خروج","Exit"));close.setOnClickListener(v->close());
+            top.addView(close,new LinearLayout.LayoutParams(dp(44),dp(44)));
+            top.addView(new View(MainActivity.this),new LinearLayout.LayoutParams(dp(44),1));panel.addView(top);
+            gap(panel,36);
+            TextView orb=label("🎙",60,WHITE);orb.setGravity(Gravity.CENTER);
+            orb.setBackground(shape(0xff161616,LINE,999));orb.setClickable(true);orb.setFocusable(true);
+            orb.setOnClickListener(v->{boolean speaking=false;try{speaking=vtts!=null&&vtts.isSpeaking();}catch(Exception ignored){}
+                if(speaking){try{vtts.stop();}catch(Exception ignored){}status.setText(tr("بتسمعك…","Listening…"));maybeListen();}});
+            panel.addView(orb,new LinearLayout.LayoutParams(dp(150),dp(150)));gap(panel,26);
+            status=label(tr("بتسمعك… اتكلم.","Listening… speak."),16,WHITE);status.setGravity(Gravity.CENTER);panel.addView(status);gap(panel,10);
+            heard=label("",13,MUTED);heard.setGravity(Gravity.CENTER);heard.setPadding(dp(24),0,dp(24),0);panel.addView(heard);gap(panel,8);
+            reply=label("",14,0xff8ec9ff);reply.setGravity(Gravity.CENTER);reply.setPadding(dp(24),0,dp(24),0);panel.addView(reply);
+            gap(panel,20);
+            TextView stop=label(tr("⏹ إيقاف الرد","⏹ Stop reply"),13,0xffed7171);stop.setGravity(Gravity.CENTER);
+            stop.setOnClickListener(v->ChatService.requestStreamStop());panel.addView(stop);
+            gap(panel,16);
+            panel.addView(label(tr("اضغط الدائرة عشان تقاطع الكلام. × للخروج.","Tap the circle to interrupt speech. × to exit."),12,MUTED));
+            dialog.setContentView(panel);
+            dialog.setOnDismissListener(d->close());
+            dialog.show();dialog.getWindow().setLayout(-1,-1);
+            if(Build.VERSION.SDK_INT>=30)dialog.getWindow().setDecorFitsSystemWindows(false);
+            panel.requestApplyInsets();
+            vtts=new android.speech.tts.TextToSpeech(MainActivity.this,s->{
+                ttsReady=s==android.speech.tts.TextToSpeech.SUCCESS;
+                if(ttsReady)try{vtts.setLanguage(arabic?new Locale("ar"):Locale.US);}catch(Exception ignored){}
+            });
+            vtts.setOnUtteranceProgressListener(new android.speech.tts.UtteranceProgressListener(){
+                @Override public void onStart(String utteranceId){}
+                @Override public void onDone(String utteranceId){handler.post(()->maybeListen());}
+                @Override public void onError(String utteranceId){handler.post(()->maybeListen());}
+            });
+            recognizer=android.speech.SpeechRecognizer.createSpeechRecognizer(MainActivity.this);
+            recognizer.setRecognitionListener(this);
+            handler.post(tick);
+            listen();
+        }
+        private void speak(String text){
+            try{if(ttsReady&&vtts!=null)vtts.speak(text,android.speech.tts.TextToSpeech.QUEUE_ADD,null,"v"+System.nanoTime());}catch(Exception ignored){}
+        }
+        private void listen(){
+            if(closed)return;
+            try{
+                Intent intent=new Intent(android.speech.RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
+                    .putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE_MODEL,android.speech.RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                    .putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE,arabic?"ar-EG":"en-US")
+                    .putExtra(android.speech.RecognizerIntent.EXTRA_PARTIAL_RESULTS,true);
+                recognizer.startListening(intent);listening=true;
+                if(!ChatService.isActive())status.setText(tr("بتسمعك…","Listening…"));
+            }catch(Exception e){status.setText(tr("الميك مش متاح","Mic unavailable"));}
+        }
+        private void maybeListen(){
+            if(closed||listening)return;
+            boolean speaking=false;try{speaking=vtts!=null&&ttsReady&&vtts.isSpeaking();}catch(Exception ignored){}
+            if(!ChatService.isActive()&&flushed&&!speaking)listen();
+        }
+        private void sendSaid(String said){
+            if(said==null||said.trim().isEmpty())return;
+            heard.setText(said.trim());status.setText(tr("بيفكر…","Thinking…"));listening=false;fed=0;flushed=false;reply.setText("");
+            try{composer.setText(said.trim());send(false);}catch(Exception e){status.setText(e.getMessage()==null?"Error":e.getMessage());}
+        }
+        void close(){
+            if(closed)return;closed=true;listening=false;
+            handler.removeCallbacks(tick);
+            try{if(recognizer!=null)recognizer.destroy();}catch(Exception ignored){}
+            try{if(vtts!=null){vtts.stop();vtts.shutdown();}}catch(Exception ignored){}
+            if(dialog!=null&&dialog.isShowing())try{dialog.dismiss();}catch(Exception ignored){}
+        }
+        @Override public void onReadyForSpeech(Bundle params){if(!ChatService.isActive())status.setText(tr("بتسمعك…","Listening…"));}
+        @Override public void onBeginningOfSpeech(){}
+        @Override public void onRmsChanged(float rmsdB){}
+        @Override public void onBufferReceived(byte[] buffer){}
+        @Override public void onEndOfSpeech(){listening=false;}
+        @Override public void onError(int error){listening=false;
+            handler.postDelayed(()->{if(!closed&&!ChatService.isActive())listen();},700);}
+        @Override public void onResults(Bundle results){
+            listening=false;if(closed)return;
+            java.util.ArrayList<String> heardList=results==null?null:results.getStringArrayList(android.speech.RecognizerIntent.EXTRA_RESULTS);
+            if(heardList!=null&&!heardList.isEmpty())sendSaid(heardList.get(0));
+            else handler.postDelayed(()->{if(!closed&&!ChatService.isActive())listen();},600);
+        }
+        @Override public void onPartialResults(Bundle partialResults){
+            if(closed)return;
+            java.util.ArrayList<String> parts=partialResults==null?null:partialResults.getStringArrayList(android.speech.RecognizerIntent.EXTRA_RESULTS);
+            if(parts!=null&&!parts.isEmpty())heard.setText(parts.get(0));
+        }
+        @Override public void onEvent(int eventType,Bundle params){}
+    }
+
+    private void scheduleDialog()throws Exception {
+        LinearLayout form=column();form.setPadding(dp(22),dp(12),dp(22),dp(12));
+        EditText time=field(form,tr("الوقت اليومي (24 ساعة)","Daily time (24h)"),"09:00",false);time.setHint("09:30");
+        EditText text=field(form,tr("نص الرسالة اللي هتتبعت يوميًا","Message text to send daily"),"",false);text.setSingleLine(false);text.setMinLines(2);
+        form.addView(label(tr("الرسالة هتتبعت للمحادثة دي يوميًا في الوقت ده، وهيوصلك إشعار بالرد حتى والتطبيق مقفول.","The message is sent to this chat daily at that time, and you get a notification with the reply even if the app is closed."),12,MUTED));
+        new AlertDialog.Builder(this).setTitle(tr("رسالة مجدولة","Scheduled message")).setView(form)
+            .setNegativeButton(tr("رجوع","Cancel"),null)
+            .setPositiveButton(tr("حفظ","Save"),(a,b)->act(()->{
+                String at=time.getText().toString().trim();
+                Alarms.nextAt(at,System.currentTimeMillis());
+                String bodyText=text.getText().toString().trim();if(bodyText.isEmpty())throw new Exception(tr("اكتب نص الرسالة.","Enter the message text."));
+                final String id=Store.id();
+                store.edit(d->{JSONArray s=d.optJSONArray("schedules");if(s==null){s=new JSONArray();d.put("schedules",s);}
+                    s.put(new JSONObject().put("id",id).put("threadId",currentThread).put("time",at).put("text",bodyText).put("enabled",true));});
+                Alarms.scheduleNext(this,new JSONObject().put("id",id).put("time",at).put("enabled",true));
+                Toast.makeText(this,tr("اتجدولت يوميًا","Scheduled daily"),Toast.LENGTH_SHORT).show();show();
+            })).show();
+    }
+    private void schedulesManager()throws Exception {
+        JSONArray schedules=Alarms.list(store.read());
+        if(schedules.length()==0){alert(tr("الرسائل المجدولة","Scheduled messages"),tr("مفيش رسايل مجدولة. افتح محادثة ← القائمة ← رسالة مجدولة.","Nothing scheduled yet. Open a chat → menu → scheduled message."));return;}
+        JSONArray threads=store.read().getJSONArray("threads");
+        java.util.List<String> labels=new ArrayList<>();final java.util.List<String> ids=new ArrayList<>();
+        for(int i=0;i<schedules.length();i++){JSONObject s=schedules.getJSONObject(i);
+            String title=s.optString("threadId");
+            for(int j=0;j<threads.length();j++){JSONObject t=threads.getJSONObject(j);
+                if(t.optString("id").equals(s.optString("threadId"))){title=t.optString("title","chat");break;}}
+            labels.add(s.optString("time")+"  ·  "+title+(s.optBoolean("enabled",true)?"  ✓":"  ✗"));
+            ids.add(s.optString("id"));}
+        new AlertDialog.Builder(this).setTitle(tr("الرسائل المجدولة","Scheduled messages")).setItems(labels.toArray(new String[0]),(d,n)->act(()->scheduleAction(ids.get(n)))).show();
+    }
+    private void scheduleAction(String id)throws Exception {
+        JSONObject s=null;JSONArray arr=Alarms.list(store.read());
+        for(int i=0;i<arr.length();i++)if(arr.getJSONObject(i).optString("id").equals(id))s=arr.getJSONObject(i);
+        if(s==null)return;
+        final JSONObject row=s;
+        String[] acts={row.optBoolean("enabled",true)?tr("إيقاف","Disable"):tr("تشغيل","Enable"),tr("حذف","Delete")};
+        new AlertDialog.Builder(this).setTitle(row.optString("time")+"  ·  "+tr("يوميًا","daily")).setItems(acts,(d,n)->act(()->{
+            if(n==0){
+                final boolean value=!row.optBoolean("enabled",true);
+                store.edit(x->{JSONArray all=x.optJSONArray("schedules");if(all==null)return;
+                    for(int i=0;i<all.length();i++)if(all.getJSONObject(i).optString("id").equals(id))all.getJSONObject(i).put("enabled",value);});
+                if(value)Alarms.scheduleNext(this,new JSONObject().put("id",id).put("time",row.optString("time")).put("enabled",true));else Alarms.cancel(this,id);
+                show();
+            }
+            if(n==1){Alarms.cancel(this,id);
+                store.edit(x->{JSONArray all=x.optJSONArray("schedules");if(all==null)return;
+                    for(int i=all.length()-1;i>=0;i--)if(all.getJSONObject(i).optString("id").equals(id))all.remove(i);});
+                show();}
+        })).show();
+    }
+    @Override public void onRequestPermissionsResult(int request,String[] permissions,int[] granted){
+        super.onRequestPermissionsResult(request,permissions,granted);
+        if(request==10&&granted.length>0&&granted[0]==PackageManager.PERMISSION_GRANTED)startVoice();
     }
     private final class BotWizard {
         private final JSONObject data;

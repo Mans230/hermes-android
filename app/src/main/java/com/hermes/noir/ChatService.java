@@ -23,14 +23,26 @@ public final class ChatService extends Service {
     public static volatile int relayRound=0, relayTotal=0;
     public static volatile boolean relayStop=false;
     public static void requestRelayStop(){relayStop=true;}
+    public static volatile boolean stopStream=false;
+    /** Stops the in-flight reply (partial text is kept); remaining queued replies of the turn are cancelled. */
+    public static void requestStreamStop(){stopStream=true;HermesApi.cancelActive();}
     public static volatile long revision=0;
+    private boolean arabic(){try{return Store.get(this).read().optString("language","en").equals("ar");}catch(Exception e){return false;}}
     @Override public IBinder onBind(Intent i){return null;}
     private Notification notification(String message,boolean ongoing){
         Intent open=new Intent(this,MainActivity.class).putExtra("thread",threadId);
         PendingIntent pi=PendingIntent.getActivity(this,7,open,PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);
-        return new Notification.Builder(this,"responses").setSmallIcon(R.drawable.ic_noir)
+        Notification.Builder builder=new Notification.Builder(this,"responses").setSmallIcon(R.drawable.ic_noir)
             .setContentTitle("Hermes").setContentText(message).setContentIntent(pi)
-            .setOngoing(ongoing).setAutoCancel(!ongoing).setVisibility(Notification.VISIBILITY_PRIVATE).build();
+            .setOngoing(ongoing).setAutoCancel(!ongoing).setVisibility(Notification.VISIBILITY_PRIVATE);
+        try{
+            boolean ar=arabic();
+            android.app.RemoteInput input=new android.app.RemoteInput.Builder("reply").setLabel(ar?"اكتب ردًا…":"Reply…").build();
+            Intent reply=new Intent(this,ReplyReceiver.class).putExtra("thread",threadId);
+            PendingIntent replyPi=PendingIntent.getBroadcast(this,9,reply,PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_MUTABLE);
+            builder.addAction(new Notification.Action.Builder(android.R.drawable.sym_action_chat,ar?"رد":"Reply",replyPi).addRemoteInput(input).build());
+        }catch(Exception ignored){}
+        return builder.build();
     }
     @Override public int onStartCommand(Intent intent,int flags,int startId){
         if(intent==null){releaseReservation();stopSelf();return START_NOT_STICKY;}
@@ -38,7 +50,7 @@ public final class ChatService extends Service {
         threadId=intent.getStringExtra("thread");
         final String activeThread=threadId,turn=intent.getStringExtra("turn");
         try{Store.get(this).edit(d->Store.find(d.getJSONArray("threads"),threadId).remove("resumeTurn"));}catch(Exception ignored){}
-        text="";model="";progress="";busy=true;reserved=false;relayRound=0;relayTotal=0;relayStop=false;revision++;
+        text="";model="";progress="";busy=true;reserved=false;relayRound=0;relayTotal=0;relayStop=false;stopStream=false;revision++;
         NotificationManager nm=getSystemService(NotificationManager.class);
         nm.createNotificationChannel(new NotificationChannel("responses","Agent replies",NotificationManager.IMPORTANCE_DEFAULT));
         startForeground(1,notification("Working…",true));
@@ -76,6 +88,7 @@ public final class ChatService extends Service {
                 busy=false;replyId="";relayRound=0;relayTotal=0;relayStop=false;revision++;stopForeground(STOP_FOREGROUND_REMOVE);
                 if(Build.VERSION.SDK_INT<33||checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)==android.content.pm.PackageManager.PERMISSION_GRANTED)
                     nm.notify(2,notification(allDone?"Your agents replied • الرد جاهز":"Some replies were interrupted • راجع المحادثة",false));
+                drainNext();
                 stopSelf();
             }
         },"hermes-group-turn").start();
@@ -117,8 +130,19 @@ public final class ChatService extends Service {
                 });
             }catch(Exception e){
                 ok=false;
-                store.edit(d->Conversations.reply(Store.find(d.getJSONArray("threads"),activeThread).getJSONArray("messages"),id)
-                    .put("status","error").put("content",text).put("tools",tools).put("error",safeError(e)));
+                boolean stopped=e instanceof HermesApi.Cancelled;
+                if(stopped){
+                    relayStop=true;
+                    stopRelayTurn(store,activeThread,turn);
+                }
+                final boolean partial=stopped&&text.length()>0;
+                store.edit(d->{
+                    JSONObject reply=Conversations.reply(Store.find(d.getJSONArray("threads"),activeThread).getJSONArray("messages"),id);
+                    reply.put("status",partial?"done":"error").put("content",text).put("tools",tools);
+                    if(partial)reply.put("ts",System.currentTimeMillis());
+                    else reply.put("error",stopped?"Stopped by user":safeError(e));
+                });
+                if(stopped)break;
             }
             revision++;
         }
@@ -142,6 +166,22 @@ public final class ChatService extends Service {
         try{Store.get(c).edit(d->Store.find(d.getJSONArray("threads"),threadId).put("resumeTurn",turn));}catch(Exception ignored){}
         watchNetwork(c);
     }
+    /** Starts the first thread that still has a queued resumeTurn; each finished turn drains the next one. */
+    private void drainNext(){
+        try{
+            Store store=Store.get(this);JSONArray threads=store.read().getJSONArray("threads");
+            for(int i=0;i<threads.length();i++){
+                JSONObject t=threads.getJSONObject(i);final String resumeTurn=t.optString("resumeTurn","");
+                if(resumeTurn.isEmpty())continue;
+                boolean has=false;JSONArray rows=t.getJSONArray("messages");
+                for(int j=0;j<rows.length();j++){JSONObject r=rows.getJSONObject(j);if(r.optString("turn").equals(resumeTurn)&&r.optString("status").equals("queued"))has=true;}
+                if(!has){final String tid=t.getString("id");store.edit(d->Store.find(d.getJSONArray("threads"),tid).remove("resumeTurn"));continue;}
+                Intent intent=new Intent(this,ChatService.class).putExtra("thread",t.getString("id")).putExtra("turn",resumeTurn);
+                if(Build.VERSION.SDK_INT>=26)startForegroundService(intent);else startService(intent);
+                return;
+            }
+        }catch(Exception ignored){}
+    }
     public static synchronized void watchNetwork(final android.content.Context c){
         if(netWatch)return;netWatch=true;
         android.net.ConnectivityManager cm=(android.net.ConnectivityManager)c.getSystemService(android.content.Context.CONNECTIVITY_SERVICE);
@@ -156,10 +196,11 @@ public final class ChatService extends Service {
                             if(resumeTurn.isEmpty())continue;
                             boolean has=false;JSONArray rows=t.getJSONArray("messages");
                             for(int j=0;j<rows.length();j++){JSONObject r=rows.getJSONObject(j);if(r.optString("turn").equals(resumeTurn)&&r.optString("status").equals("queued"))has=true;}
-                            store.edit(d->Store.find(d.getJSONArray("threads"),t.getString("id")).remove("resumeTurn"));
                             if(!has)continue;
+                            // The service clears resumeTurn on start and drains the remaining threads as turns finish.
                             Intent intent=new Intent(c,ChatService.class).putExtra("thread",t.getString("id")).putExtra("turn",resumeTurn);
                             if(Build.VERSION.SDK_INT>=26)c.startForegroundService(intent);else c.startService(intent);
+                            break;
                         }
                     }catch(Exception ignored){}
                 }

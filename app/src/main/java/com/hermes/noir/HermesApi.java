@@ -11,6 +11,16 @@ import java.nio.charset.StandardCharsets;
 /** Direct public Hermes API; never talks to Telegram or an LLM provider directly. */
 public final class HermesApi {
     public interface Stream { void delta(String text, String model); void progress(String message); void reasoning(String value); }
+    /** Raised when the user stops the stream; text received so far is kept as a partial reply. */
+    public static final class Cancelled extends IOException { public Cancelled(){super("Stopped by user");} }
+    private static volatile HttpsURLConnection active=null;
+    private static volatile boolean cancel=false;
+    /** Stops the in-flight stream as soon as possible; the current reply keeps its partial text. */
+    public static void cancelActive(){
+        cancel=true;
+        HttpsURLConnection c=active;
+        if(c!=null)try{c.disconnect();}catch(Exception ignored){}
+    }
     public static HttpsURLConnection open(JSONObject bot, String path, String method) throws Exception {
         URL url = new URL(Endpoint.normalize(bot.getString("url")) + path);
         HttpsURLConnection c = (HttpsURLConnection)url.openConnection();
@@ -68,6 +78,7 @@ public final class HermesApi {
         c.setRequestProperty("Accept","text/event-stream");
         c.setRequestProperty("Content-Type","application/json; charset=utf-8");
         c.setDoOutput(true);
+        cancel=false;active=c;
         byte[] bytes=request.toString().getBytes(StandardCharsets.UTF_8);c.setFixedLengthStreamingMode(bytes.length);
         StringBuilder output = new StringBuilder(); StringBuilder think = new StringBuilder(); String[] model={""}; boolean[] done={false};
         JSONObject[] usage={new JSONObject()};
@@ -80,6 +91,7 @@ public final class HermesApi {
             if(contentType==null || !contentType.toLowerCase(java.util.Locale.ROOT).contains("text/event-stream"))
                 throw new IOException("Server did not return an SSE stream. Check API compatibility.");
             SseReader.read(new InputStreamReader(c.getInputStream(),StandardCharsets.UTF_8),(type,text)->{
+                if(cancel)throw new Cancelled();
                 if(text.equals("[DONE]")){done[0]=true;return false;}
                 if(type.equals("hermes.tool.progress")){
                     JSONObject activity=new JSONObject(text);
@@ -118,6 +130,6 @@ public final class HermesApi {
             if(output.length()==0)throw new IOException("Hermes returned no visible text. Check the bot before retrying.");
             return new JSONObject().put("content",output.toString()).put("model",model[0]).put("usage",usage[0])
                 .put("thinking",think.length()>0?think.toString():"");
-        } finally { deadline.cancel(); c.disconnect(); }
+        } finally { if(active==c)active=null; deadline.cancel(); c.disconnect(); }
     }
 }

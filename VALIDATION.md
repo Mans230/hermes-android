@@ -1,3 +1,18 @@
+# Validation — 2026-09-27 · v0.10.0 (pre-CI, local)
+
+| Check | Result |
+|---|---|
+| Full javac type-check of all 15 main sources against the complete Android framework jar (Robolectric android-all 17) with a stub R class | PASS — 0 errors |
+| JUnit suite: 21 tests (Markdown parser ×10, SSE protocol, endpoint URLs, mention router, relay) run on the JVM | PASS |
+| Brace/paren syntax check, all 19 source and test files (`tools/check_syntax.py`) | PASS |
+| Android Gradle build, Lint and APK assembly | PENDING — this machine has no Android SDK; CI runs it on push |
+| Device runtime: voice mode, notification quick reply, alarms, share targets, shortcuts | NOT RUN — requires a phone |
+| Real Debian/Hermes integration with the new features | NOT RUN — server connection unavailable |
+
+Note: the local javac type-check validates types against the framework jar but not resources, manifest merging or Lint; the CI build on push remains the authoritative gate.
+
+---
+
 # Validation — 2026-09-05 · revision 0.2.0
 
 | Check | Result |
